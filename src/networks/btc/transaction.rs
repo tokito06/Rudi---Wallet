@@ -14,8 +14,9 @@ use bitcoin::{
 use std::str::FromStr;
 use anyhow::Result;
 use bitcoin::consensus::encode::serialize_hex;
-use crate::network::Utxo;
+
 use bitcoin::hashes::Hash;
+use crate::networks::btc::bitcoin_network::Utxo;
 
 
 pub fn send_btc( private_key: PrivateKey, utxos: Vec<Utxo>, recipient: &str, amount_sat: u64, change_address: &str,) -> Result<String> {
@@ -91,6 +92,7 @@ pub fn send_btc( private_key: PrivateKey, utxos: Vec<Utxo>, recipient: &str, amo
             .into_script();
     }
 
-    Ok(serialize_hex(&tx))
-
+    let tx_hex = serialize_hex(&tx);
+    let txid = crate::networks::btc::bitcoin_network::broadcast_tx(&tx_hex)?;
+    Ok(txid)
 }
