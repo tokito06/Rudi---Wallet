@@ -1,7 +1,7 @@
 use crate::networks;
 use anyhow::Result;
 use bitcoin::PrivateKey;
-use solana_sdk::signer::keypair::Keypair;
+use ed25519_dalek::SigningKey;
 
 #[derive(PartialEq)]
 pub enum Network {
@@ -12,7 +12,7 @@ pub enum Network {
 
 pub enum Key {
     Btc(PrivateKey),
-    Sol(Keypair),
+    Sol(SigningKey),  // ← changed from Keypair to SigningKey
 }
 
 impl Network {
@@ -28,16 +28,18 @@ impl Network {
             (Network::Btc, Key::Btc(private_key)) => {
                 let utxos = networks::btc::bitcoin_network::get_utxos(sender_address)?;
                 let amount_sat = (amount * 100_000_000.0) as u64;
-                networks::btc::transaction::send_btc(private_key, utxos, recipient, amount_sat, change_address)
+                networks::btc::transaction::send_btc(
+                    private_key,
+                    utxos,
+                    recipient,
+                    amount_sat,
+                    change_address,
+                )
             }
-            (Network::Sol, Key::Sol(keypair)) => {
-                networks::solana_network::send_sol(keypair, recipient, amount)
+            (Network::Sol, Key::Sol(signing_key)) => {
+                networks::solana_network::send_sol(&signing_key, recipient, amount)
             }
             _ => anyhow::bail!("Key type does not match network"),
         }
     }
 }
-
-
-
-

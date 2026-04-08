@@ -69,7 +69,7 @@ pub fn update(app: &mut App, msg: Msg) {
                     Err(e) => { app.tx_result = Some(format!("Error: {}", e)); return; }
                 },
                 crate::making_tx::Network::Sol => match crate::solana::derive_private_key(&app.seed) {
-                    Ok(k) => crate::making_tx::Key::Sol(k),
+                    Ok(k) => crate::making_tx::Key::Sol(k.signing_key),
                     Err(e) => { app.tx_result = Some(format!("Error: {}", e)); return; }
                 },
             };
