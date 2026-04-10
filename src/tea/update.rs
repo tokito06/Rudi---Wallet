@@ -47,10 +47,11 @@ pub fn update(app: &mut App, msg: Msg) {
                                                 app.amount_buffer.push_str(&s)
                                             }
                                         },
-        Msg::ToggleNetwork    => {
+        Msg::ToggleNetwork => {
             app.network = match app.network {
                 crate::making_tx::Network::Btc => crate::making_tx::Network::Sol,
-                crate::making_tx::Network::Sol => crate::making_tx::Network::Btc,
+                crate::making_tx::Network::Sol => crate::making_tx::Network::Eth,
+                crate::making_tx::Network::Eth => crate::making_tx::Network::Btc,
             };
         }
         Msg::SendTokens       => {
@@ -72,10 +73,16 @@ pub fn update(app: &mut App, msg: Msg) {
                     Ok(k) => crate::making_tx::Key::Sol(k.signing_key),
                     Err(e) => { app.tx_result = Some(format!("Error: {}", e)); return; }
                 },
+                crate::making_tx::Network::Eth => match crate::ethereum::derive_private_key(&app.seed) {
+                    Ok(k) => crate::making_tx::Key::Eth(k),
+                    Err(e) => { app.tx_result = Some(format!("Error: {}", e)); return; }
+                },
             };
             let sender = match app.network {
                 crate::making_tx::Network::Btc => app.bitcoin_address.clone(),
                 crate::making_tx::Network::Sol => app.solana_address.clone(),
+                crate::making_tx::Network::Eth => app.ethereum_address.clone(),
+
             };
             let change = app.bitcoin_address.clone();
             match app.network.send(key, &sender, &app.input_buffer.clone(), amount, &change) {

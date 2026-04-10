@@ -36,3 +36,9 @@ crossterm = "0.27"
 
 # Error handling
 anyhow = "1.0"
+
+# Async runtime
+tokio = { version = "1.0", features = ["full"] }
+
+# Ethereum - Alloy 1.0
+alloy = { version = "1.0", features = ["full"] }

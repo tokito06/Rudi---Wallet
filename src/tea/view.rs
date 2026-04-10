@@ -8,7 +8,6 @@ use ratatui::{
 use crate::tea::model::{App, Screen};
 
 pub fn draw(frame: &mut Frame, app: &App) {
-    // Split screen: header (3) | body (fill) | footer (3)
     let layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -42,9 +41,14 @@ fn draw_header(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
 }
 
 fn draw_home(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
+    // three equal columns now
     let cols = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage(33),
+            Constraint::Percentage(33),
+            Constraint::Percentage(34),
+        ])
         .split(area);
 
     // Bitcoin panel
@@ -68,6 +72,17 @@ fn draw_home(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     let sol = Paragraph::new(sol_text)
         .block(Block::default().borders(Borders::ALL).title(" SOL "));
     frame.render_widget(sol, cols[1]);
+
+    // Ethereum panel
+    let eth_text = vec![
+        Line::from(Span::styled("Ethereum (Sepolia)", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD))),
+        Line::from(""),
+        Line::from(Span::raw(format!("Address: {}", app.ethereum_address))),
+        Line::from(Span::raw(format!("Balance: {} ETH", app.eth_balance))),
+    ];
+    let eth = Paragraph::new(eth_text)
+        .block(Block::default().borders(Borders::ALL).title(" ETH "));
+    frame.render_widget(eth, cols[2]);
 }
 
 fn draw_send(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
@@ -91,13 +106,15 @@ fn draw_send(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         .style(Style::default().fg(Color::Yellow));
     frame.render_widget(amount, rows[1]);
 
+    // updated to show Eth as well
     let network_label = match app.network {
         crate::making_tx::Network::Btc => "BTC (Testnet)",
         crate::making_tx::Network::Sol => "SOL (Devnet)",
+        crate::making_tx::Network::Eth => "ETH (Sepolia)",
     };
     let network_widget = Paragraph::new(network_label)
         .block(Block::default().borders(Borders::ALL).title(" Network  [Ctrl+N to toggle] "))
-        .style(Style::default().fg(Color::Cyan));
+        .style(Style::default().fg(Color::Magenta));
     frame.render_widget(network_widget, rows[2]);
 
     let status = app.tx_result.as_deref().unwrap_or("Fill fields and press Enter to send.");
@@ -115,7 +132,11 @@ fn draw_send(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
 fn draw_receive(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     let rows = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Length(3),
+            Constraint::Length(3),
+        ])
         .split(area);
 
     let btc = Paragraph::new(app.bitcoin_address.as_str())
@@ -127,6 +148,11 @@ fn draw_receive(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         .block(Block::default().borders(Borders::ALL).title(" Your Solana Address "))
         .style(Style::default().fg(Color::Cyan));
     frame.render_widget(sol, rows[1]);
+
+    let eth = Paragraph::new(app.ethereum_address.as_str())
+        .block(Block::default().borders(Borders::ALL).title(" Your Ethereum Address "))
+        .style(Style::default().fg(Color::Magenta));
+    frame.render_widget(eth, rows[2]);
 }
 
 fn draw_footer(frame: &mut Frame, _app: &App, area: ratatui::layout::Rect) {
@@ -137,7 +163,7 @@ fn draw_footer(frame: &mut Frame, _app: &App, area: ratatui::layout::Rect) {
         Span::raw("Receive  "),
         Span::styled("[Esc] ", Style::default().fg(Color::Green)),
         Span::raw("Home  "),
-        Span::styled("[e] + Control ", Style::default().fg(Color::Red)),
+        Span::styled("[t] + Control ", Style::default().fg(Color::Red)),
         Span::raw("Quit"),
     ]))
     .block(Block::default().borders(Borders::ALL));

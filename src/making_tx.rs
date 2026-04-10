@@ -2,17 +2,19 @@ use crate::networks;
 use anyhow::Result;
 use bitcoin::PrivateKey;
 use ed25519_dalek::SigningKey;
+use alloy::signers::local::PrivateKeySigner;
 
 #[derive(PartialEq)]
 pub enum Network {
     Btc,
     Sol,
-    // Eth,
+    Eth,
 }
 
 pub enum Key {
     Btc(PrivateKey),
-    Sol(SigningKey),  // ← changed from Keypair to SigningKey
+    Sol(SigningKey), // ← changed from Keypair to SigningKey
+    Eth(PrivateKeySigner),
 }
 
 impl Network {
@@ -38,6 +40,15 @@ impl Network {
             }
             (Network::Sol, Key::Sol(signing_key)) => {
                 networks::solana_network::send_sol(&signing_key, recipient, amount)
+            }
+            (Network::Eth, Key::Eth(signer)) => {
+                tokio::runtime::Runtime::new()
+                    .unwrap()
+                    .block_on(networks::ethereum_network::send_eth(
+                        signer,
+                        recipient,
+                        amount,
+                    ))
             }
             _ => anyhow::bail!("Key type does not match network"),
         }
