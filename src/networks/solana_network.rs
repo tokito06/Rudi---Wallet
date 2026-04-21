@@ -3,8 +3,10 @@ use anyhow::Result;
 use serde_json;
 use ed25519_dalek::{SigningKey, Signer};
 use bs58;
+use crate::types::{Transaction, Direction, Status};
+use crate::making_tx::Network;
 
-fn rpc_call(method: &str, params: serde_json::Value) -> Result<serde_json::Value> {
+pub fn rpc_call(method: &str, params: serde_json::Value) -> Result<serde_json::Value> {
     let client = Client::new();
     let url = "https://api.devnet.solana.com";
 
@@ -144,4 +146,41 @@ fn base64_encode(data: &[u8]) -> String {
     }
 
     result
+}
+
+pub fn map_solana_tx(result: &serde_json::Value, my_address: &str) -> Option<Transaction> {
+    let meta = &result["meta"];
+    let message = &result["transaction"]["message"];
+
+    let account_keys = message["accountKeys"].as_array()?;
+    let address_from = account_keys[0].as_str()?.to_string();
+    let address_to = account_keys[1].as_str()?.to_string();
+
+    let pre_balances = meta["preBalances"].as_array()?;
+    let post_balances = meta["postBalances"].as_array()?;
+
+    let receiver_pre = pre_balances[1].as_u64()?;
+    let receiver_post = post_balances[1].as_u64()?;
+    let amount = (receiver_post - receiver_pre) as f64 / 1_000_000_000.0;
+    let fee = meta["fee"].as_u64()? as f64 / 1_000_000_000.0;
+
+    let direction = if my_address == address_from {
+        Direction::Sent
+    } else if my_address == address_to {
+        Direction::Receive
+    } else {
+        return None;
+    };
+
+    Some(Transaction {
+        txid: result["transaction"]["signatures"][0].as_str()?.to_string(),
+        network: Network::Sol,
+        direction,
+        status: if meta["err"].is_null() { Status::Success } else { Status::Rejected },
+        timestamp: result["blockTime"].as_i64()?.to_string(),
+        amount,
+        address_from,
+        address_to,
+        fee,
+    })
 }

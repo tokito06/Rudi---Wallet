@@ -6,6 +6,8 @@ mod ethereum;
 mod networks;
 mod making_tx;
 mod tea;
+mod types;
+mod history;
 
 use crossterm::{
     event::{self, Event, KeyCode, EnableBracketedPaste, DisableBracketedPaste, KeyModifiers, KeyEventKind},

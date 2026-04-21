@@ -3,8 +3,9 @@ use anyhow::Result;
 use bitcoin::PrivateKey;
 use ed25519_dalek::SigningKey;
 use alloy::signers::local::PrivateKeySigner;
+use serde::{Deserialize, Serialize};
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Deserialize, Serialize, Clone)]
 pub enum Network {
     Btc,
     Sol,
