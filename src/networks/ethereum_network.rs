@@ -7,8 +7,8 @@ use alloy::{
 use alloy::signers::local::PrivateKeySigner;
 use anyhow::Result;
 use reqwest::blocking::Client;
-use crate::types::{Transaction, Direction, Status};
-use crate::making_tx::Network;
+use crate::helpers::types::{Transaction, Direction, Status};
+use crate::helpers::making_tx::Network;
 
 
 pub async fn get_provider() -> Result<impl Provider> {

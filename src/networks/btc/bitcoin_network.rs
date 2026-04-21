@@ -1,8 +1,8 @@
 use reqwest::{blocking::Client};
 use anyhow::Result;
 use serde::{Deserialize};
-use crate::types::{Transaction, Direction, Status};
-use crate::making_tx::Network;
+use crate::helpers::types::{Transaction, Direction, Status};
+use crate::helpers::making_tx::Network;
 
 #[derive(Deserialize)]
 pub struct Utxo {
