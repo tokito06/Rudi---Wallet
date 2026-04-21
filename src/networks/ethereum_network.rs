@@ -1,11 +1,15 @@
 use alloy::{
     providers::{Provider, ProviderBuilder},
     primitives::{Address, U256},
-    network::{EthereumWallet, TransactionBuilder},  // ← add TransactionBuilder
+    network::{EthereumWallet, TransactionBuilder},
     rpc::types::TransactionRequest,
 };
 use alloy::signers::local::PrivateKeySigner;
 use anyhow::Result;
+use reqwest::blocking::Client;
+use crate::types::{Transaction, Direction, Status};
+use crate::making_tx::Network;
+
 
 pub async fn get_provider() -> Result<impl Provider> {
     let provider = ProviderBuilder::new()
@@ -57,3 +61,61 @@ pub async fn send_eth(signer: PrivateKeySigner, recipient: &str, amount_eth: f64
     Ok(transaction_hash.tx_hash().to_string())
 }
 
+pub fn fetch_eth_history(address: &str, since_txid: Option<String>) -> Result<Vec<Transaction>> {
+    let client = Client::new();
+    let url = format!(
+        "https://eth-sepolia.blockscout.com/api?module=account&action=txlist&address={}&sort=desc",
+        address
+    );
+    let resp: serde_json::Value = client.get(&url).send()?.json()?;
+    let raw_txs = resp["result"].as_array().cloned().unwrap_or_default();
+    let mut txs = vec![];
+
+    for tx in &raw_txs {
+        if tx["hash"].as_str() == since_txid.as_deref() {
+            break;
+        }
+        if let Some(transaction) = map_ethereum_tx(tx, address) {
+            txs.push(transaction);
+        }
+    }
+    Ok(txs)
+}
+
+pub fn map_ethereum_tx(result: &serde_json::Value, my_address: &str) -> Option<Transaction> {
+    let address_from = result["from"].as_str()?.to_string();
+    let address_to = result["to"].as_str()?.to_string();
+
+    let my = my_address.to_lowercase();
+    let direction = if address_from.to_lowercase() == my {
+        Direction::Sent
+    } else {
+        Direction::Received
+    };
+
+
+    let value_wei: u128 = result["value"].as_str()?.parse().ok()?;
+    let amount = value_wei as f64 / 1_000_000_000_000_000_000.0;
+
+    let gas_used: u128 = result["gasUsed"].as_str()?.parse().ok()?;
+    let gas_price: u128 = result["gasPrice"].as_str()?.parse().ok()?;
+    let fee = (gas_used * gas_price) as f64 / 1_000_000_000_000_000_000.0;
+
+    let status = if result["isError"].as_str().unwrap_or("0") == "0" {
+        Status::Success
+    } else {
+        Status::Rejected
+    };
+
+    Some(Transaction {
+        txid: result["hash"].as_str()?.to_string(),
+        network: Network::Eth,
+        direction,
+        status,
+        timestamp: result["timeStamp"].as_str()?.to_string(),
+        amount,
+        address_from,
+        address_to,
+        fee,
+    })
+}
