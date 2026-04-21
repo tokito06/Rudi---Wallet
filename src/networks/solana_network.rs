@@ -148,6 +148,26 @@ fn base64_encode(data: &[u8]) -> String {
     result
 }
 
+pub fn fetch_sol_history(address: &str, since_txid: Option<String>) -> anyhow::Result<Vec<crate::types::Transaction>> {
+    let sigs = rpc_call("getSignaturesForAddress", serde_json::json!([address, {
+        "limit": 10,
+        "until": since_txid
+    }]))?;
+    let mut txs = vec![];
+
+    for sig in sigs["result"].as_array().unwrap_or(&vec![]) {
+        let signature = sig["signature"].as_str().unwrap();
+        let tx = rpc_call("getTransaction", serde_json::json!([signature, {
+            "encoding": "json",
+            "commitment": "confirmed"
+        }]))?;
+        if let Some(transaction) = map_solana_tx(&tx["result"], address) {
+            txs.push(transaction);
+        }
+    }
+    Ok(txs)
+}
+
 pub fn map_solana_tx(result: &serde_json::Value, my_address: &str) -> Option<Transaction> {
     let meta = &result["meta"];
     let message = &result["transaction"]["message"];

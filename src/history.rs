@@ -1,10 +1,11 @@
-use serde_json::json;
 use std::sync::{Arc, Mutex};
 use anyhow::{Result, Context};
 use std::path::PathBuf;
 use std::fs;
 use crate::making_tx::Network;
 use crate::networks::solana_network;
+use crate::networks::btc::bitcoin_network;
+use crate::networks::ethereum_network;
 use crate::types::{Transaction};
 
 pub struct History {
@@ -74,27 +75,8 @@ impl History {
 
 fn fetch_network_history(network: &Network, address: &str, since_txid: Option<String>) -> Result<Vec<Transaction>> {
     match network {
-        Network::Sol => {
-            let sigs = solana_network::rpc_call("getSignaturesForAddress", json!([address, {
-                "limit": 10,
-                "until": since_txid
-            }]))?;
-            let mut txs = vec![];
-
-            for sig in sigs["result"].as_array().unwrap_or(&vec![]) {
-                let signature = sig["signature"].as_str().unwrap();
-                let tx = solana_network::rpc_call("getTransaction", json!([signature, {
-                    "encoding": "json",
-                    "commitment": "confirmed"
-                }]))?;
-
-                if let Some(transaction) = solana_network::map_solana_tx(&tx["result"], address) {
-                    txs.push(transaction);
-                }
-            }
-            Ok(txs)
-        }
-        Network::Btc => Ok(vec![]),
-        Network::Eth => Ok(vec![]),
+        Network::Sol => solana_network::fetch_sol_history(address, since_txid),
+        Network::Btc => bitcoin_network::fetch_btc_history(address, since_txid),
+        Network::Eth => ethereum_network::fetch_eth_history(address, since_txid),
     }
 }
