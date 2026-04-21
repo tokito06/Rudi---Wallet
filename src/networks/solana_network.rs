@@ -155,15 +155,19 @@ pub fn fetch_sol_history(address: &str, since_txid: Option<String>) -> anyhow::R
     }]))?;
     let mut txs = vec![];
 
-    for sig in sigs["result"].as_array().unwrap_or(&vec![]) {
-        let signature = sig["signature"].as_str().unwrap();
-        let tx = rpc_call("getTransaction", serde_json::json!([signature, {
-            "encoding": "json",
-            "commitment": "confirmed"
-        }]))?;
-        if let Some(transaction) = map_solana_tx(&tx["result"], address) {
-            txs.push(transaction);
-        }
+    if let Some(sig_results) = sigs["result"].as_array() {
+        for sig in sig_results {
+            let signature = sig["signature"]
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("Failed to parse signature from getSignaturesForAddress response"))?;
+            let tx = rpc_call("getTransaction", serde_json::json!([signature, {
+                "encoding": "json",
+                "commitment": "confirmed"
+            }]))?;
+            if let Some(transaction) = map_solana_tx(&tx["result"], address) {
+                txs.push(transaction);
+            }
+        }   
     }
     Ok(txs)
 }
@@ -179,18 +183,23 @@ pub fn map_solana_tx(result: &serde_json::Value, my_address: &str) -> Option<Tra
     let pre_balances = meta["preBalances"].as_array()?;
     let post_balances = meta["postBalances"].as_array()?;
 
-    let receiver_pre = pre_balances[1].as_u64()?;
-    let receiver_post = post_balances[1].as_u64()?;
-    let amount = (receiver_post - receiver_pre) as f64 / 1_000_000_000.0;
-    let fee = meta["fee"].as_u64()? as f64 / 1_000_000_000.0;
-
-    let direction = if my_address == address_from {
-        Direction::Sent
+    let (direction, balance_index) = if my_address == address_from {
+        (Direction::Sent, 0usize)
     } else if my_address == address_to {
-        Direction::Receive
+        (Direction::Received, 1usize)
     } else {
         return None;
     };
+    let account_pre = pre_balances[balance_index].as_u64()? as i128;
+    let account_post = post_balances[balance_index].as_u64()? as i128;
+    let balance_delta = account_post - account_pre;
+    let amount_lamports = match direction {
+        Direction::Sent => (-balance_delta).max(0),
+        Direction::Received => balance_delta.max(0),
+        _ => return None,
+    };
+    let amount = amount_lamports as f64 / 1_000_000_000.0;
+    let fee = meta["fee"].as_u64()? as f64 / 1_000_000_000.0;
 
     Some(Transaction {
         txid: result["transaction"]["signatures"][0].as_str()?.to_string(),

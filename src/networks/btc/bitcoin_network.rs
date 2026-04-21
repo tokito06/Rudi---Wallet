@@ -52,12 +52,14 @@ pub fn fetch_btc_history(address: &str, since_txid: Option<String>) -> Result<Ve
     let raw_txs: serde_json::Value = client.get(&url).send()?.json()?;
     let mut txs = vec![];
 
-    for tx in raw_txs.as_array().unwrap_or(&vec![]) {
-        if tx["txid"].as_str() == since_txid.as_deref() {
-            break;
-        }
-        if let Some(transaction) = map_bitcoin_tx(tx, address) {
-            txs.push(transaction);
+    if let Some(raw_txs) = raw_txs.as_array() {
+        for tx in raw_txs {
+            if tx["txid"].as_str() == since_txid.as_deref() {
+                break;
+            }
+            if let Some(transaction) = map_bitcoin_tx(tx, address) {
+                txs.push(transaction);
+            }
         }
     }
     Ok(txs)
@@ -93,7 +95,7 @@ pub fn map_bitcoin_tx(result: &serde_json::Value, my_address: &str) -> Option<Tr
          Direction::Sent 
         } 
         else { 
-            Direction::Receive 
+            Direction::Received 
         };
 
     Some(Transaction {

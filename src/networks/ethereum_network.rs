@@ -90,7 +90,7 @@ pub fn map_ethereum_tx(result: &serde_json::Value, my_address: &str) -> Option<T
     let direction = if address_from.to_lowercase() == my {
         Direction::Sent
     } else {
-        Direction::Receive
+        Direction::Received
     };
 
 

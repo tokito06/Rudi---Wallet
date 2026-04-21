@@ -17,7 +17,7 @@ pub struct Transaction {
 #[derive(Serialize, Deserialize, Clone)]
 pub enum Direction {
     Sent,
-    Receive,
+    Received,
 }
 
 #[derive(Serialize, Deserialize, Clone)]

@@ -30,9 +30,11 @@ impl History {
 
     pub fn store_history(&self) -> Result<()> {
         let path = history_path();
-        let file = &self.history;
-        fs::write(&path, serde_json::to_string_pretty(&file)?)
-            .with_context(|| format!("Could not write to {:?}", path))?;
+        let history = self.history
+            .lock()
+            .map_err(|_| anyhow::anyhow!("History mutex was poisoned"))?;
+        let json = serde_json::to_string_pretty(&*history)?;
+        fs::write(&path, json);
         Ok(())
     }
 
@@ -66,7 +68,8 @@ impl History {
             (Network::Eth, eth_address),
         ] {
             let since_txid = self.last_entry_network(&network);
-            let new_txs = fetch_network_history(&network, address, since_txid)?;
+            let mut new_txs = fetch_network_history(&network, address, since_txid)?;
+            new_txs.reverse();
             self.history.lock().unwrap().extend(new_txs);
         }
         self.store_history()
