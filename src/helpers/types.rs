@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use crate::making_tx::Network;
+use crate::helpers::making_tx::Network;
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Transaction {

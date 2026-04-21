@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>RuDi Wallet</title>
+    <script type="module">
+      import { invoke } from 'https://unpkg.com/@tauri-apps/api@2/core';
+
+      // test wallet_exists command
+      const exists = await invoke('wallet_exists');
+      document.getElementById('status').textContent = 
+        exists ? 'Wallet found!' : 'No wallet yet';
+    </script>
+  </head>
+  <body>
+    <h1>🦀 RuDi Wallet</h1>
+    <p id="status">Checking...</p>
+  </body>
+</html>

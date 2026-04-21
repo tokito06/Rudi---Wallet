@@ -3,8 +3,8 @@ use anyhow::Result;
 use serde_json;
 use ed25519_dalek::{SigningKey, Signer};
 use bs58;
-use crate::types::{Transaction, Direction, Status};
-use crate::making_tx::Network;
+use crate::helpers::types::{Transaction, Direction, Status};
+use crate::helpers::making_tx::Network;
 
 pub fn rpc_call(method: &str, params: serde_json::Value) -> Result<serde_json::Value> {
     let client = Client::new();
@@ -148,7 +148,7 @@ fn base64_encode(data: &[u8]) -> String {
     result
 }
 
-pub fn fetch_sol_history(address: &str, since_txid: Option<String>) -> anyhow::Result<Vec<crate::types::Transaction>> {
+pub fn fetch_sol_history(address: &str, since_txid: Option<String>) -> anyhow::Result<Vec<crate::helpers::types::Transaction>> {
     let sigs = rpc_call("getSignaturesForAddress", serde_json::json!([address, {
         "limit": 10,
         "until": since_txid

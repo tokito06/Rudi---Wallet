@@ -2,11 +2,11 @@ use std::sync::{Arc, Mutex};
 use anyhow::{Result, Context};
 use std::path::PathBuf;
 use std::fs;
-use crate::making_tx::Network;
+use crate::helpers::making_tx::Network;
 use crate::networks::solana_network;
 use crate::networks::btc::bitcoin_network;
 use crate::networks::ethereum_network;
-use crate::types::{Transaction};
+use crate::helpers::types::{Transaction};
 
 pub struct History {
     history: Arc<Mutex<Vec<Transaction>>>
