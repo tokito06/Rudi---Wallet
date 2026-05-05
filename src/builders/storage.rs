@@ -8,24 +8,30 @@ use serde::{Deserialize, Serialize};
 use anyhow::{Context, Result};
 use std::{fs, path::PathBuf};
 
-// What gets saved to disk (all sensitive data is inside `encrypted`)
+
+const PBKDF2_ITERATIONS: u32 = 600_000;
+const WALLET_VERSION: u8 = 1;
+
 #[derive(Serialize, Deserialize)]
 pub struct WalletFile {
     pub version: u8,
-    pub salt: String,       // random, used in PBKDF2
-    pub nonce: String,      // random, used in AES-GCM
-    pub encrypted: String,  // the actual secret data, encrypted
+    pub salt: String,
+    pub nonce: String,
+    pub encrypted: String,
 }
 
-// The secret data — only lives in RAM, never written to disk as plaintext
 #[derive(Serialize, Deserialize, Debug)]
 pub struct WalletData {
     pub mnemonic: String,
 }
 
 fn wallet_path() -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-    PathBuf::from(home).join(".crypto-wallet.dat")
+    let home = std::env::var("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")));
+    
+    let home = std::fs::canonicalize(&home).unwrap_or(home);
+    home.join(".crypto-wallet.dat")
 }
 
 pub fn wallet_exists() -> bool {
@@ -33,11 +39,9 @@ pub fn wallet_exists() -> bool {
 }
 
 pub fn save_wallet(mnemonic: &str, password: &str) -> Result<()> {
-    // Step 1: prepare the data we want to encrypt
     let data = WalletData { mnemonic: mnemonic.to_string() };
     let plaintext = serde_json::to_vec(&data)?;
 
-    // Step 2: generate a random salt (makes every encryption unique)
     let salt: [u8; 16] = {
         let mut s = [0u8; 16];
         use rand::RngCore;
@@ -45,22 +49,19 @@ pub fn save_wallet(mnemonic: &str, password: &str) -> Result<()> {
         s
     };
 
-    // Step 3: derive a 256-bit encryption key from the password
     let mut key_bytes = [0u8; 32];
-    pbkdf2_hmac::<Sha256>(password.as_bytes(), &salt, 100_000, &mut key_bytes);
+    pbkdf2_hmac::<Sha256>(password.as_bytes(), &salt, PBKDF2_ITERATIONS, &mut key_bytes);
 
-    // Step 4: encrypt with AES-256-GCM
-    let key    = Key::<Aes256Gcm>::from_slice(&key_bytes);
+    let key = Key::<Aes256Gcm>::from_slice(&key_bytes);
     let cipher = Aes256Gcm::new(key);
-    let nonce  = Aes256Gcm::generate_nonce(&mut OsRng);
+    let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
 
     let ciphertext = cipher
         .encrypt(&nonce, plaintext.as_ref())
         .map_err(|e| anyhow::anyhow!("Encryption failed: {}", e))?;
 
-    // Step 5: save salt + nonce + ciphertext to disk as JSON
     let file = WalletFile {
-        version: 1,
+        version: WALLET_VERSION,
         salt: hex::encode(salt),
         nonce: hex::encode(nonce),
         encrypted: hex::encode(ciphertext),
@@ -70,7 +71,6 @@ pub fn save_wallet(mnemonic: &str, password: &str) -> Result<()> {
     fs::write(&path, serde_json::to_string_pretty(&file)?)
         .with_context(|| format!("Could not write to {:?}", path))?;
 
-    println!("Wallet saved to: {:?}", path);
     Ok(())
 }
 
@@ -80,24 +80,24 @@ pub fn load_wallet(password: &str) -> Result<WalletData> {
         anyhow::bail!("No wallet found. Create one first.");
     }
 
-    // Read and parse the JSON file
     let json = fs::read_to_string(&path)?;
     let file: WalletFile = serde_json::from_str(&json)
         .context("Wallet file is corrupted")?;
 
-    // Decode hex values back to bytes
-    let salt       = hex::decode(&file.salt)?;
-    let nonce_raw  = hex::decode(&file.nonce)?;
+    if file.version != WALLET_VERSION {
+        anyhow::bail!("Unsupported wallet version: {}", file.version);
+    }
+
+    let salt = hex::decode(&file.salt)?;
+    let nonce_raw = hex::decode(&file.nonce)?;
     let ciphertext = hex::decode(&file.encrypted)?;
 
-    // Re-derive the same key using the stored salt + the password
     let mut key_bytes = [0u8; 32];
-    pbkdf2_hmac::<Sha256>(password.as_bytes(), &salt, 100_000, &mut key_bytes);
+    pbkdf2_hmac::<Sha256>(password.as_bytes(), &salt, PBKDF2_ITERATIONS, &mut key_bytes);
 
-    // Decrypt — fails with clear error if password is wrong
-    let key    = Key::<Aes256Gcm>::from_slice(&key_bytes);
+    let key = Key::<Aes256Gcm>::from_slice(&key_bytes);
     let cipher = Aes256Gcm::new(key);
-    let nonce  = Nonce::from_slice(&nonce_raw);
+    let nonce = Nonce::from_slice(&nonce_raw);
 
     let plaintext = cipher
         .decrypt(nonce, ciphertext.as_ref())
@@ -105,4 +105,169 @@ pub fn load_wallet(password: &str) -> Result<WalletData> {
 
     let data: WalletData = serde_json::from_slice(&plaintext)?;
     Ok(data)
+}
+
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+    use serial_test::serial;
+
+    fn setup(dir: &TempDir) {
+        let path = dir.path().to_path_buf();
+        std::fs::create_dir_all(&path).unwrap();
+        std::env::set_var("HOME", path);
+    }
+
+    const TEST_MNEMONIC: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+    const TEST_PASSWORD: &str = "test_password_123";
+
+
+    #[test]
+    #[serial]
+    fn test_wallet_exists_returns_false_when_no_file() {
+        let dir = TempDir::new().unwrap();
+        setup(&dir);
+        assert!(!wallet_exists());
+    }
+
+    #[test]
+    #[serial]
+    fn test_wallet_exists_returns_true_after_save() {
+        let dir = TempDir::new().unwrap();
+        setup(&dir);
+        save_wallet(TEST_MNEMONIC, TEST_PASSWORD).unwrap();
+        assert!(wallet_exists());
+    }
+
+    #[test]
+    #[serial]
+    fn test_save_wallet_creates_file() {
+        let dir = TempDir::new().unwrap();
+        setup(&dir);
+        save_wallet(TEST_MNEMONIC, TEST_PASSWORD).unwrap();
+        assert!(wallet_path().exists());
+    }
+
+    #[test]
+    #[serial]
+    fn test_save_wallet_file_is_valid_json() {
+        let dir = TempDir::new().unwrap();
+        setup(&dir);
+        save_wallet(TEST_MNEMONIC, TEST_PASSWORD).unwrap();
+        let json = std::fs::read_to_string(wallet_path()).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert!(parsed.get("version").is_some());
+        assert!(parsed.get("salt").is_some());
+        assert!(parsed.get("nonce").is_some());
+        assert!(parsed.get("encrypted").is_some());
+    }
+
+    #[test]
+    #[serial]
+    fn test_save_wallet_version_is_1() {
+        let dir = TempDir::new().unwrap();
+        setup(&dir);
+        save_wallet(TEST_MNEMONIC, TEST_PASSWORD).unwrap();
+        let json = std::fs::read_to_string(wallet_path()).unwrap();
+        let file: WalletFile = serde_json::from_str(&json).unwrap();
+        assert_eq!(file.version, 1);
+    }
+
+    #[test]
+    #[serial]
+    fn test_load_wallet_correct_password() {
+        let dir = TempDir::new().unwrap();
+        setup(&dir);
+        save_wallet(TEST_MNEMONIC, TEST_PASSWORD).unwrap();
+        let data = load_wallet(TEST_PASSWORD).unwrap();
+        assert_eq!(data.mnemonic, TEST_MNEMONIC);
+    }
+
+    #[test]
+    #[serial]
+    fn test_load_wallet_wrong_password() {
+        let dir = TempDir::new().unwrap();
+        setup(&dir);
+        save_wallet(TEST_MNEMONIC, TEST_PASSWORD).unwrap();
+        assert!(load_wallet("wrong_password").is_err());
+    }
+
+    #[test]
+    #[serial]
+    fn test_load_wallet_no_file() {
+        let dir = TempDir::new().unwrap();
+        setup(&dir);
+        assert!(load_wallet(TEST_PASSWORD).is_err());
+    }
+
+    #[test]
+    #[serial]
+    fn test_load_wallet_corrupted_file() {
+        let dir = TempDir::new().unwrap();
+        setup(&dir);
+        std::fs::write(wallet_path(), "not valid json").unwrap();
+        assert!(load_wallet(TEST_PASSWORD).is_err());
+    }
+
+    #[test]
+    #[serial]
+    fn test_load_wallet_unsupported_version() {
+        let dir = TempDir::new().unwrap();
+        setup(&dir);
+        save_wallet(TEST_MNEMONIC, TEST_PASSWORD).unwrap();
+        let json = std::fs::read_to_string(wallet_path()).unwrap();
+        let mut file: WalletFile = serde_json::from_str(&json).unwrap();
+        file.version = 99;
+        std::fs::write(wallet_path(), serde_json::to_string_pretty(&file).unwrap()).unwrap();
+        assert!(load_wallet(TEST_PASSWORD).is_err());
+    }
+
+    #[test]
+    #[serial]
+    fn test_save_wallet_different_passwords_give_different_ciphertext() {
+        let dir1 = TempDir::new().unwrap();
+        setup(&dir1);
+        save_wallet(TEST_MNEMONIC, "password1").unwrap();
+        let json1 = std::fs::read_to_string(wallet_path()).unwrap();
+        let file1: WalletFile = serde_json::from_str(&json1).unwrap();
+
+        let dir2 = TempDir::new().unwrap();
+        setup(&dir2);
+        save_wallet(TEST_MNEMONIC, "password2").unwrap();
+        let json2 = std::fs::read_to_string(wallet_path()).unwrap();
+        let file2: WalletFile = serde_json::from_str(&json2).unwrap();
+
+        assert_ne!(file1.encrypted, file2.encrypted);
+    }
+
+    #[test]
+    #[serial]
+    fn test_save_wallet_same_input_gives_different_ciphertext() {
+        let dir = TempDir::new().unwrap();
+        setup(&dir);
+        println!("HOME: {:?}", std::env::var("HOME"));
+        println!("wallet_path: {:?}", wallet_path());
+        save_wallet(TEST_MNEMONIC, TEST_PASSWORD).unwrap();
+        let json1 = std::fs::read_to_string(wallet_path()).unwrap();
+        let file1: WalletFile = serde_json::from_str(&json1).unwrap();
+
+        save_wallet(TEST_MNEMONIC, TEST_PASSWORD).unwrap();
+        let json2 = std::fs::read_to_string(wallet_path()).unwrap();
+        let file2: WalletFile = serde_json::from_str(&json2).unwrap();
+
+        assert_ne!(file1.encrypted, file2.encrypted);
+    }
+
+    #[test]
+    #[serial]
+    fn test_load_wallet_empty_password() {
+        let dir = TempDir::new().unwrap();
+        setup(&dir);
+        save_wallet(TEST_MNEMONIC, "").unwrap();
+        let data = load_wallet("").unwrap();
+        assert_eq!(data.mnemonic, TEST_MNEMONIC);
+    }
 }
