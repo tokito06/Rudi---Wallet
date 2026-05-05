@@ -38,3 +38,11 @@ tokio = { version = "1.0", features = ["full"] }
 
 # Ethereum - Alloy 1.0
 alloy = { version = "1.0", features = ["full"] }
+
+# Cross platform 
+dirs = "6.0.0"
+zeroize = "1.8.2"
+
+[dev-dependencies]
+serial_test = "3.4.0"
+tempfile = "3.27.0"

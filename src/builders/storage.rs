@@ -7,11 +7,13 @@ use sha2::Sha256;
 use serde::{Deserialize, Serialize};
 use anyhow::{Context, Result};
 use std::{fs, path::PathBuf};
+use zeroize::Zeroize;
+use crate::builders::password;
+
 
 
 const PBKDF2_ITERATIONS: u32 = 600_000;
 const WALLET_VERSION: u8 = 1;
-
 #[derive(Serialize, Deserialize)]
 pub struct WalletFile {
     pub version: u8,
@@ -88,6 +90,10 @@ pub fn load_wallet(password: &str) -> Result<WalletData> {
         anyhow::bail!("Unsupported wallet version: {}", file.version);
     }
 
+    decrypt_wallet_data(&file, password)
+}
+
+fn decrypt_wallet_data(file: &WalletFile, password: &str) -> Result<WalletData> {
     let salt = hex::decode(&file.salt)?;
     let nonce_raw = hex::decode(&file.nonce)?;
     let ciphertext = hex::decode(&file.encrypted)?;
@@ -103,10 +109,32 @@ pub fn load_wallet(password: &str) -> Result<WalletData> {
         .decrypt(nonce, ciphertext.as_ref())
         .map_err(|_| anyhow::anyhow!("Wrong password or corrupted file."))?;
 
-    let data: WalletData = serde_json::from_slice(&plaintext)?;
-    Ok(data)
+    Ok(serde_json::from_slice(&plaintext)?)
 }
 
+pub fn change_password(old_pass: &str, new_pass: &str) -> Result<()> {
+    if !password::strong_password(new_pass) {
+        anyhow::bail!(
+            "New password too weak (strength: {}). Avoid repeated/sequential characters and aim for 80+ bits of entropy.",
+            password::password_strength(new_pass)
+        );
+    }
+
+    let path = wallet_path();
+    if !path.exists() {
+        anyhow::bail!("No wallet found.");
+    }
+
+    let json = fs::read_to_string(&path)?;
+    let file: WalletFile = serde_json::from_str(&json)
+        .context("Wallet file is corrupted")?;
+
+    let mut data = decrypt_wallet_data(&file, old_pass)?;
+    let result = save_wallet(&data.mnemonic, new_pass);
+    data.mnemonic.zeroize();
+
+    result
+}
 
 
 #[cfg(test)]
@@ -268,6 +296,67 @@ mod tests {
         setup(&dir);
         save_wallet(TEST_MNEMONIC, "").unwrap();
         let data = load_wallet("").unwrap();
+        assert_eq!(data.mnemonic, TEST_MNEMONIC);
+    }
+
+    #[test]
+    #[serial]
+    fn test_change_password_success() {
+        let dir = TempDir::new().unwrap();
+        setup(&dir);
+        save_wallet(TEST_MNEMONIC, TEST_PASSWORD).unwrap();
+        let new_pass = "N3w$ecureP@ss99!";
+        change_password(TEST_PASSWORD, new_pass).unwrap();
+        let data = load_wallet(new_pass).unwrap();
+        assert_eq!(data.mnemonic, TEST_MNEMONIC);
+    }
+
+    #[test]
+    #[serial]
+    fn test_change_password_old_password_no_longer_works() {
+        let dir = TempDir::new().unwrap();
+        setup(&dir);
+        save_wallet(TEST_MNEMONIC, TEST_PASSWORD).unwrap();
+        let new_pass = "N3w$ecureP@ss99!";
+        change_password(TEST_PASSWORD, new_pass).unwrap();
+        assert!(load_wallet(TEST_PASSWORD).is_err());
+    }
+
+    #[test]
+    #[serial]
+    fn test_change_password_wrong_old_password() {
+        let dir = TempDir::new().unwrap();
+        setup(&dir);
+        save_wallet(TEST_MNEMONIC, TEST_PASSWORD).unwrap();
+        assert!(change_password("wrong_old_pass", "N3w$ecureP@ss99!").is_err());
+    }
+
+    #[test]
+    #[serial]
+    fn test_change_password_weak_new_password() {
+        let dir = TempDir::new().unwrap();
+        setup(&dir);
+        save_wallet(TEST_MNEMONIC, TEST_PASSWORD).unwrap();
+        assert!(change_password(TEST_PASSWORD, "weak").is_err());
+    }
+
+    #[test]
+    #[serial]
+    fn test_change_password_no_wallet() {
+        let dir = TempDir::new().unwrap();
+        setup(&dir);
+        assert!(change_password(TEST_PASSWORD, "N3w$ecureP@ss99!").is_err());
+    }
+
+    #[test]
+    #[serial]
+    fn test_change_password_mnemonic_preserved() {
+        let dir = TempDir::new().unwrap();
+        setup(&dir);
+        save_wallet(TEST_MNEMONIC, TEST_PASSWORD).unwrap();
+        let new_pass = "N3w$ecureP@ss99!";
+        change_password(TEST_PASSWORD, new_pass).unwrap();
+        let data = load_wallet(new_pass).unwrap();
         assert_eq!(data.mnemonic, TEST_MNEMONIC);
     }
 }
