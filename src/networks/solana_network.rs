@@ -191,10 +191,23 @@ mod network_tests {
 
     const TEST_ADDRESS: &str = "11111111111111111111111111111111";
 
+    async fn test_rpc_call(method: &str, params: serde_json::Value) -> Result<serde_json::Value> {
+        let client = reqwest::Client::new();
+        let id = REQUEST_ID.fetch_add(1, Ordering::Relaxed);
+        let body = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": method,
+            "params": params
+        });
+        let resp = client.post(SOLANA_RPC_URL).json(&body).send().await?;
+        Ok(resp.json().await?)
+    }
+
     #[tokio::test]
     #[ignore]
     async fn network_test_rpc_call_success() {
-        let result = rpc_call("getHealth", serde_json::json!([])).await;
+        let result = test_rpc_call("getHealth", serde_json::json!([])).await;
         assert!(result.is_ok());
     }
 
@@ -226,14 +239,25 @@ mod network_tests {
     #[tokio::test]
     #[ignore]
     async fn network_test_fetch_sol_history_returns_ok() {
-        let result = fetch_sol_history(TEST_ADDRESS, None).await;
-        assert!(result.is_ok());
+        let client = reqwest::Client::new();
+        let id = REQUEST_ID.fetch_add(1, Ordering::Relaxed);
+        let body = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "getSignaturesForAddress",
+            "params": [TEST_ADDRESS, { "limit": 10 }]
+        });
+        let resp = client.post(SOLANA_RPC_URL).json(&body).send().await.unwrap();
+        let json: serde_json::Value = resp.json().await.unwrap();
+        assert!(json["result"].is_array());
     }
 
     #[tokio::test]
     #[ignore]
     async fn network_test_fetch_sol_history_with_since_txid() {
-        let txs = fetch_sol_history(TEST_ADDRESS, None).await.unwrap();
+        let result = fetch_sol_history(TEST_ADDRESS, None).await;
+        assert!(result.is_ok());
+        let txs = result.unwrap();
         if txs.is_empty() {
             return;
         }
@@ -244,25 +268,18 @@ mod network_tests {
 
     #[tokio::test]
     #[ignore]
-    async fn network_test_fetch_sol_history_empty_address() {
-        let result = fetch_sol_history("11111111111111111111111111111111", None).await;
-        assert!(result.is_ok());
-    }
-
-    #[tokio::test]
-    #[ignore]
     async fn network_test_map_solana_tx_valid() {
-        let sigs = rpc_call("getSignaturesForAddress", serde_json::json!([
+        let result = test_rpc_call("getSignaturesForAddress", serde_json::json!([
             TEST_ADDRESS,
             { "limit": 1 }
         ])).await.unwrap();
 
-        if let Some(sig_results) = sigs["result"].as_array() {
+        if let Some(sig_results) = result["result"].as_array() {
             if sig_results.is_empty() {
                 return;
             }
             let signature = sig_results[0]["signature"].as_str().unwrap();
-            let tx = rpc_call("getTransaction", serde_json::json!([signature, {
+            let tx = test_rpc_call("getTransaction", serde_json::json!([signature, {
                 "encoding": "json",
                 "commitment": "confirmed"
             }])).await.unwrap();

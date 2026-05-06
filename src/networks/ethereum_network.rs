@@ -120,3 +120,123 @@ pub fn map_ethereum_tx(result: &serde_json::Value, my_address: &str) -> Option<T
         fee,
     })
 }
+
+
+#[cfg(test)]
+mod network_tests {
+    use super::*;
+
+    const TEST_ADDRESS: &str = "0x0000000000000000000000000000000000000000";
+
+    #[tokio::test]
+    #[ignore]
+    async fn network_test_get_provider_success() {
+        let result = get_provider().await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn network_test_get_eth_balance_valid_address() {
+        let result = get_eth_balance(TEST_ADDRESS).await;
+        assert!(result.is_ok());
+        assert!(result.unwrap() >= 0.0);
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn network_test_get_eth_balance_invalid_address() {
+        let result = get_eth_balance("invalid_address").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn network_test_fetch_eth_history_returns_ok() {
+        let result = fetch_eth_history(TEST_ADDRESS, None).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn network_test_fetch_eth_history_with_since_txid() {
+        let txs = fetch_eth_history(TEST_ADDRESS, None).await.unwrap();
+        if txs.is_empty() {
+            return;
+        }
+        let since = Some(txs[0].txid.clone());
+        let result = fetch_eth_history(TEST_ADDRESS, since).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn network_test_fetch_eth_history_empty_result() {
+        let result = fetch_eth_history(TEST_ADDRESS, None).await.unwrap();
+        assert!(result.len() >= 0);
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn network_test_map_ethereum_tx_direction_sent() {
+        let tx = serde_json::json!({
+            "hash": "0xabc123",
+            "from": TEST_ADDRESS,
+            "to": "0x1111111111111111111111111111111111111111",
+            "value": "1000000000000000000",
+            "gasUsed": "21000",
+            "gasPrice": "1000000000",
+            "isError": "0",
+            "timeStamp": "1000000"
+        });
+        let result = map_ethereum_tx(&tx, TEST_ADDRESS);
+        assert!(result.is_some());
+        let tx = result.unwrap();
+        assert!(matches!(tx.direction, crate::helpers::types::Direction::Sent));
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn network_test_map_ethereum_tx_direction_received() {
+        let tx = serde_json::json!({
+            "hash": "0xabc123",
+            "from": "0x1111111111111111111111111111111111111111",
+            "to": TEST_ADDRESS,
+            "value": "1000000000000000000",
+            "gasUsed": "21000",
+            "gasPrice": "1000000000",
+            "isError": "0",
+            "timeStamp": "1000000"
+        });
+        let result = map_ethereum_tx(&tx, TEST_ADDRESS);
+        assert!(result.is_some());
+        let tx = result.unwrap();
+        assert!(matches!(tx.direction, crate::helpers::types::Direction::Received));
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn network_test_map_ethereum_tx_failed_tx() {
+        let tx = serde_json::json!({
+            "hash": "0xabc123",
+            "from": TEST_ADDRESS,
+            "to": "0x1111111111111111111111111111111111111111",
+            "value": "1000000000000000000",
+            "gasUsed": "21000",
+            "gasPrice": "1000000000",
+            "isError": "1",
+            "timeStamp": "1000000"
+        });
+        let result = map_ethereum_tx(&tx, TEST_ADDRESS);
+        assert!(result.is_some());
+        assert!(matches!(result.unwrap().status, crate::helpers::types::Status::Rejected));
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn network_test_map_ethereum_tx_missing_fields() {
+        let tx = serde_json::json!({});
+        let result = map_ethereum_tx(&tx, TEST_ADDRESS);
+        assert!(result.is_none());
+    }
+}
