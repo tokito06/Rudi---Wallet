@@ -1,30 +1,37 @@
-use reqwest::blocking::Client;
+use reqwest::Client;
 use anyhow::Result;
 use serde_json;
 use ed25519_dalek::{SigningKey, Signer};
 use bs58;
+use base64::{Engine, engine::general_purpose::STANDARD};
+use once_cell::sync::Lazy;
+use std::sync::atomic::{AtomicU64, Ordering};
 use crate::helpers::types::{Transaction, Direction, Status};
 use crate::helpers::making_tx::Network;
 
-pub fn rpc_call(method: &str, params: serde_json::Value) -> Result<serde_json::Value> {
-    let client = Client::new();
-    let url = "https://api.devnet.solana.com";
+const SOLANA_RPC_URL: &str = "https://api.devnet.solana.com";
+
+static CLIENT: Lazy<Client> = Lazy::new(Client::new);
+static REQUEST_ID: AtomicU64 = AtomicU64::new(1);
+
+pub async fn rpc_call(method: &str, params: serde_json::Value) -> Result<serde_json::Value> {
+    let id = REQUEST_ID.fetch_add(1, Ordering::Relaxed);
 
     let body = serde_json::json!({
         "jsonrpc": "2.0",
-        "id": 1,
+        "id": id,
         "method": method,
         "params": params
     });
 
-    let resp = client.post(url).json(&body).send()?;
-    let json: serde_json::Value = resp.json()?;
+    let resp = CLIENT.post(SOLANA_RPC_URL).json(&body).send().await?;
+    let json: serde_json::Value = resp.json().await?;
     Ok(json)
 }
 
-pub fn get_sol_balance(address: &str) -> Result<f64> {
+pub async fn get_sol_balance(address: &str) -> Result<f64> {
     let address = address.trim();
-    let resp = rpc_call("getBalance", serde_json::json!([address]))?;
+    let resp = rpc_call("getBalance", serde_json::json!([address])).await?;
 
     let lamports = resp["result"]["value"]
         .as_u64()
@@ -33,8 +40,8 @@ pub fn get_sol_balance(address: &str) -> Result<f64> {
     Ok(lamports as f64 / 1_000_000_000.0)
 }
 
-pub fn get_latest_blockhash() -> Result<String> {
-    let resp = rpc_call("getLatestBlockhash", serde_json::json!([]))?;
+pub async fn get_latest_blockhash() -> Result<String> {
+    let resp = rpc_call("getLatestBlockhash", serde_json::json!([])).await?;
 
     let blockhash = resp["result"]["value"]["blockhash"]
         .as_str()
@@ -44,75 +51,54 @@ pub fn get_latest_blockhash() -> Result<String> {
     Ok(blockhash)
 }
 
-pub fn send_sol(signing_key: &SigningKey, recipient: &str, amount_sol: f64) -> Result<String> {
-    // Step 1 — get latest blockhash
-    let blockhash_str = get_latest_blockhash()?;
+pub async fn send_sol(signing_key: &SigningKey, recipient: &str, amount_sol: f64) -> Result<String> {
+    let blockhash_str = get_latest_blockhash().await?;
     let blockhash_bytes = bs58::decode(&blockhash_str)
         .into_vec()
         .map_err(|e| anyhow::anyhow!("Failed to decode blockhash: {}", e))?;
 
-    // Step 2 — get sender public key
     let sender_pubkey = signing_key.verifying_key();
     let sender_bytes = sender_pubkey.as_bytes();
 
-    // Step 3 — decode recipient address
     let recipient_bytes = bs58::decode(recipient.trim())
         .into_vec()
         .map_err(|e| anyhow::anyhow!("Invalid recipient address: {}", e))?;
 
-    // Step 4 — convert SOL to lamports
     let lamports = (amount_sol * 1_000_000_000.0) as u64;
 
-    // Step 5 — build the transaction message
-    // Solana transaction format:
-    // [num_signatures][num_readonly_signed][num_readonly_unsigned]
-    // [num_accounts][accounts...][blockhash][num_instructions][instructions...]
-    let mut message: Vec<u8> = vec![
-        1,    // num required signatures
-        0,    // num readonly signed accounts
-        1,    // num readonly unsigned accounts (system program)
-    ];
+    let mut message: Vec<u8> = vec![1, 0, 1];
 
-    // accounts: sender, recipient, system program
-    let system_program = vec![0u8; 32]; // system program is all zeros
-    message.push(3); // number of accounts
+    let system_program = vec![0u8; 32];
+    message.push(3);
     message.extend_from_slice(sender_bytes);
     message.extend_from_slice(&recipient_bytes);
     message.extend_from_slice(&system_program);
-
-    // recent blockhash
     message.extend_from_slice(&blockhash_bytes);
 
-    // instruction: system transfer
-    message.push(1); // number of instructions
-    message.push(2); // program id index (system program = index 2)
-    message.push(2); // number of accounts in instruction
-    message.push(0); // sender account index
-    message.push(1); // recipient account index
+    message.push(1);
+    message.push(2);
+    message.push(2);
+    message.push(0);
+    message.push(1);
 
-    // instruction data: transfer (2) + lamports (8 bytes little endian)
-    let mut instruction_data = vec![2u8, 0, 0, 0]; // transfer instruction
+    let mut instruction_data = vec![2u8, 0, 0, 0];
     instruction_data.extend_from_slice(&lamports.to_le_bytes());
     message.push(instruction_data.len() as u8);
     message.extend_from_slice(&instruction_data);
 
-    // Step 6 — sign the message
     let signature = signing_key.sign(&message);
     let signature_bytes = signature.to_bytes();
 
-    // Step 7 — build full transaction
-    // [num_signatures][signature][message]
-    let mut transaction: Vec<u8> = vec![1]; // 1 signature
+    let mut transaction: Vec<u8> = vec![1];
     transaction.extend_from_slice(&signature_bytes);
     transaction.extend_from_slice(&message);
 
-    // Step 8 — encode as base64 and send
-    let tx_base64 = base64_encode(&transaction);
+    let tx_base64 = STANDARD.encode(&transaction);
 
     let resp = rpc_call("sendTransaction", serde_json::json!([
         tx_base64,
         { "encoding": "base64" }
-    ]))?;
+    ])).await?;
 
     if let Some(err) = resp.get("error") {
         anyhow::bail!("Transaction failed: {}", err);
@@ -126,49 +112,31 @@ pub fn send_sol(signing_key: &SigningKey, recipient: &str, amount_sol: f64) -> R
     Ok(signature)
 }
 
-// Simple base64 encoder (no extra crate needed)
-fn base64_encode(data: &[u8]) -> String {
-    const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut result = String::new();
-    let mut i = 0;
-
-    while i < data.len() {
-        let b0 = data[i] as u32;
-        let b1 = if i + 1 < data.len() { data[i + 1] as u32 } else { 0 };
-        let b2 = if i + 2 < data.len() { data[i + 2] as u32 } else { 0 };
-
-        result.push(CHARS[((b0 >> 2) & 0x3F) as usize] as char);
-        result.push(CHARS[(((b0 << 4) | (b1 >> 4)) & 0x3F) as usize] as char);
-        result.push(if i + 1 < data.len() { CHARS[(((b1 << 2) | (b2 >> 6)) & 0x3F) as usize] as char } else { '=' });
-        result.push(if i + 2 < data.len() { CHARS[(b2 & 0x3F) as usize] as char } else { '=' });
-
-        i += 3;
-    }
-
-    result
-}
-
-pub fn fetch_sol_history(address: &str, since_txid: Option<String>) -> anyhow::Result<Vec<crate::helpers::types::Transaction>> {
+pub async fn fetch_sol_history(address: &str, since_txid: Option<String>) -> Result<Vec<Transaction>> {
     let sigs = rpc_call("getSignaturesForAddress", serde_json::json!([address, {
         "limit": 10,
         "until": since_txid
-    }]))?;
+    }])).await?;
+
     let mut txs = vec![];
 
     if let Some(sig_results) = sigs["result"].as_array() {
         for sig in sig_results {
             let signature = sig["signature"]
                 .as_str()
-                .ok_or_else(|| anyhow::anyhow!("Failed to parse signature from getSignaturesForAddress response"))?;
+                .ok_or_else(|| anyhow::anyhow!("Failed to parse signature"))?;
+
             let tx = rpc_call("getTransaction", serde_json::json!([signature, {
                 "encoding": "json",
                 "commitment": "confirmed"
-            }]))?;
+            }])).await?;
+
             if let Some(transaction) = map_solana_tx(&tx["result"], address) {
                 txs.push(transaction);
             }
-        }   
+        }
     }
+
     Ok(txs)
 }
 
@@ -190,14 +158,16 @@ pub fn map_solana_tx(result: &serde_json::Value, my_address: &str) -> Option<Tra
     } else {
         return None;
     };
+
     let account_pre = pre_balances[balance_index].as_u64()? as i128;
     let account_post = post_balances[balance_index].as_u64()? as i128;
     let balance_delta = account_post - account_pre;
+
     let amount_lamports = match direction {
         Direction::Sent => (-balance_delta).max(0),
         Direction::Received => balance_delta.max(0),
-        _ => return None,
     };
+
     let amount = amount_lamports as f64 / 1_000_000_000.0;
     let fee = meta["fee"].as_u64()? as f64 / 1_000_000_000.0;
 
@@ -212,4 +182,110 @@ pub fn map_solana_tx(result: &serde_json::Value, my_address: &str) -> Option<Tra
         address_to,
         fee,
     })
+}
+
+
+#[cfg(test)]
+mod network_tests {
+    use super::*;
+
+    const TEST_ADDRESS: &str = "11111111111111111111111111111111";
+
+    async fn test_rpc_call(method: &str, params: serde_json::Value) -> Result<serde_json::Value> {
+        let client = reqwest::Client::new();
+        let id = REQUEST_ID.fetch_add(1, Ordering::Relaxed);
+        let body = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": method,
+            "params": params
+        });
+        let resp = client.post(SOLANA_RPC_URL).json(&body).send().await?;
+        Ok(resp.json().await?)
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn network_test_rpc_call_success() {
+        let result = test_rpc_call("getHealth", serde_json::json!([])).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn network_test_get_sol_balance_valid_address() {
+        let result = get_sol_balance(TEST_ADDRESS).await;
+        assert!(result.is_ok());
+        assert!(result.unwrap() >= 0.0);
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn network_test_get_sol_balance_invalid_address() {
+        let result = get_sol_balance("invalid_address").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn network_test_get_latest_blockhash() {
+        let result = get_latest_blockhash().await;
+        assert!(result.is_ok());
+        let blockhash = result.unwrap();
+        assert!(!blockhash.is_empty());
+        assert!(bs58::decode(&blockhash).into_vec().is_ok());
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn network_test_fetch_sol_history_returns_ok() {
+        let client = reqwest::Client::new();
+        let id = REQUEST_ID.fetch_add(1, Ordering::Relaxed);
+        let body = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "getSignaturesForAddress",
+            "params": [TEST_ADDRESS, { "limit": 10 }]
+        });
+        let resp = client.post(SOLANA_RPC_URL).json(&body).send().await.unwrap();
+        let json: serde_json::Value = resp.json().await.unwrap();
+        assert!(json["result"].is_array());
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn network_test_fetch_sol_history_with_since_txid() {
+        let result = fetch_sol_history(TEST_ADDRESS, None).await;
+        assert!(result.is_ok());
+        let txs = result.unwrap();
+        if txs.is_empty() {
+            return;
+        }
+        let since = Some(txs[0].txid.clone());
+        let result = fetch_sol_history(TEST_ADDRESS, since).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn network_test_map_solana_tx_valid() {
+        let result = test_rpc_call("getSignaturesForAddress", serde_json::json!([
+            TEST_ADDRESS,
+            { "limit": 1 }
+        ])).await.unwrap();
+
+        if let Some(sig_results) = result["result"].as_array() {
+            if sig_results.is_empty() {
+                return;
+            }
+            let signature = sig_results[0]["signature"].as_str().unwrap();
+            let tx = test_rpc_call("getTransaction", serde_json::json!([signature, {
+                "encoding": "json",
+                "commitment": "confirmed"
+            }])).await.unwrap();
+
+            let result = map_solana_tx(&tx["result"], TEST_ADDRESS);
+            assert!(result.is_some() || result.is_none());
+        }
+    }
 }

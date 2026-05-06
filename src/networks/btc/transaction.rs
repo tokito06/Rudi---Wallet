@@ -1,79 +1,91 @@
 use bitcoin::{
-    Transaction, TxIn, TxOut,        // transaction building blocks
-    OutPoint, ScriptBuf,             // input/output details
-    Sequence, Witness,               // required fields
-    Amount,                          // amount type
-    PrivateKey, PublicKey,           // for signing
-    secp256k1::Secp256k1,           // for signing
-    Address,                         // to parse recipient address
-    Network,                         // testnet
-    sighash::SighashCache,          // for creating the signature hash
-    EcdsaSighashType,               // signature type
+    Transaction, TxIn, TxOut,
+    OutPoint, ScriptBuf,
+    Sequence, Witness,
+    Amount,
+    PrivateKey, PublicKey,
+    secp256k1::Secp256k1,
+    Address,
+    Network,
+    sighash::SighashCache,
+    EcdsaSighashType,
 };
-
 use std::str::FromStr;
 use anyhow::Result;
 use bitcoin::consensus::encode::serialize_hex;
-
 use bitcoin::hashes::Hash;
 use crate::networks::btc::bitcoin_network::Utxo;
 
+const DUST_LIMIT: u64 = 546;
+const SAT_PER_VBYTE: u64 = 10;
 
-pub fn send_btc( private_key: PrivateKey, utxos: Vec<Utxo>, recipient: &str, amount_sat: u64, change_address: &str,) -> Result<String> {
-    let inputs: Vec<TxIn> = utxos.iter().map(|utxo| {
-    TxIn {
-        previous_output: OutPoint {
-            txid: utxo.txid.parse().unwrap(),
-            vout: utxo.vout,
-        },
-        script_sig: ScriptBuf::new(),  // empty for now, filled when signing
-        sequence: Sequence::MAX,
-        witness: Witness::default(),
+fn estimate_fee(input_count: usize, output_count: usize) -> u64 {
+    let tx_size = (input_count * 148 + output_count * 34 + 10) as u64;
+    tx_size * SAT_PER_VBYTE
+}
+
+pub async fn send_btc(
+    private_key: PrivateKey,
+    utxos: Vec<Utxo>,
+    recipient: &str,
+    amount_sat: u64,
+    change_address: &str,
+) -> Result<String> {
+    let inputs: Vec<TxIn> = utxos.iter().map(|utxo| -> Result<TxIn> {
+        Ok(TxIn {
+            previous_output: OutPoint {
+                txid: utxo.txid.parse()?,
+                vout: utxo.vout,
+            },
+            script_sig: ScriptBuf::new(),
+            sequence: Sequence::MAX,
+            witness: Witness::default(),
+        })
+    }).collect::<Result<Vec<_>>>()?;
+
+    let total_input: u64 = utxos.iter().map(|u| u.value).sum();
+    let fee = estimate_fee(inputs.len(), 2);
+
+    if amount_sat + fee > total_input {
+        anyhow::bail!("Not enough funds. Required: {}, Available: {}", amount_sat + fee, total_input);
     }
-    }).collect();
 
+    let change = total_input - amount_sat - fee;
 
-    let total_input = utxos.iter().map(|u| u.value).sum();
-
-    let fee = 1000;
-
-    let change = {
-        if amount_sat + fee < total_input {
-            total_input - amount_sat - fee
-        }
-        else {
-            anyhow::bail!("Not enough tokens");
-        }
-    };
+    if change > 0 && change < DUST_LIMIT {
+        anyhow::bail!("Change amount {} is below dust limit {}", change, DUST_LIMIT);
+    }
 
     let recipient_address = Address::from_str(recipient)?.require_network(Network::Testnet)?;
     let change_address = Address::from_str(change_address)?.require_network(Network::Testnet)?;
 
-    let outputs = vec![
+    let mut outputs = vec![
         TxOut {
             value: Amount::from_sat(amount_sat),
             script_pubkey: recipient_address.script_pubkey(),
         },
-        TxOut {
-            value: Amount::from_sat(change),
-            script_pubkey: change_address.script_pubkey(),
-        },
     ];
 
-    let mut tx = Transaction {
-    version: bitcoin::transaction::Version::TWO,
-    lock_time: bitcoin::absolute::LockTime::ZERO,
-    input: inputs,
-    output: outputs,
-    };
+    if change >= DUST_LIMIT {
+        outputs.push(TxOut {
+            value: Amount::from_sat(change),
+            script_pubkey: change_address.script_pubkey(),
+        });
+    }
 
+    let mut tx = Transaction {
+        version: bitcoin::transaction::Version::TWO,
+        lock_time: bitcoin::absolute::LockTime::ZERO,
+        input: inputs,
+        output: outputs,
+    };
 
     let secp = Secp256k1::new();
     let pubkey = PublicKey::from_private_key(&secp, &private_key);
     let script = Address::p2pkh(&pubkey, Network::Testnet).script_pubkey();
 
     for i in 0..tx.input.len() {
-        let mut cache = SighashCache::new(&tx);
+        let cache = SighashCache::new(&tx);
         let sighash = cache.legacy_signature_hash(
             i,
             &script,
@@ -87,12 +99,16 @@ pub fn send_btc( private_key: PrivateKey, utxos: Vec<Utxo>, recipient: &str, amo
         sig_bytes.push(EcdsaSighashType::All.to_u32() as u8);
 
         tx.input[i].script_sig = bitcoin::ScriptBuf::builder()
-            .push_slice(bitcoin::script::PushBytesBuf::try_from(sig_bytes).unwrap().as_push_bytes())
+            .push_slice(
+                bitcoin::script::PushBytesBuf::try_from(sig_bytes)
+                    .map_err(|e| anyhow::anyhow!("Failed to push sig bytes: {}", e))?
+                    .as_push_bytes()
+            )
             .push_key(&pubkey)
             .into_script();
     }
 
     let tx_hex = serialize_hex(&tx);
-    let txid = crate::networks::btc::bitcoin_network::broadcast_tx(&tx_hex)?;
+    let txid = crate::networks::btc::bitcoin_network::broadcast_tx(&tx_hex).await?;
     Ok(txid)
 }
