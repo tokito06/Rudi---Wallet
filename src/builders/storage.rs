@@ -182,7 +182,7 @@ mod tests {
     }
 
     const TEST_MNEMONIC: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
-    const TEST_PASSWORD: &str = "test_password_123";
+    const TEST_PASSWORD: &str = "Test_P@ssw0rd!";
 
 
     #[test]
@@ -290,13 +290,13 @@ mod tests {
     fn test_save_wallet_different_passwords_give_different_ciphertext() {
         let dir1 = TempDir::new().unwrap();
         setup(&dir1);
-        save_wallet(TEST_MNEMONIC, "password1").unwrap();
+        save_wallet(TEST_MNEMONIC, "Other_P@ssw0rd!1").unwrap();
         let json1 = std::fs::read_to_string(wallet_path()).unwrap();
         let file1: WalletFile = serde_json::from_str(&json1).unwrap();
 
         let dir2 = TempDir::new().unwrap();
         setup(&dir2);
-        save_wallet(TEST_MNEMONIC, "password2").unwrap();
+        save_wallet(TEST_MNEMONIC, "Other_P@ssw0rd!89").unwrap();
         let json2 = std::fs::read_to_string(wallet_path()).unwrap();
         let file2: WalletFile = serde_json::from_str(&json2).unwrap();
 
@@ -324,11 +324,12 @@ mod tests {
     #[test]
     #[serial]
     fn test_load_wallet_empty_password() {
-        let dir = TempDir::new().unwrap();
-        setup(&dir);
-        save_wallet(TEST_MNEMONIC, "").unwrap();
-        let data = load_wallet("").unwrap();
-        assert_eq!(data.mnemonic, TEST_MNEMONIC);
+        let result = save_wallet(TEST_MNEMONIC, "");
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Password must include uppercase, lowercase, numeric, and special characters"
+        );
     }
 
     #[test]
