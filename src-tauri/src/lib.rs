@@ -95,7 +95,7 @@ fn get_address(
     let seed = seed_guard.as_ref().ok_or("Wallet is locked")?;
 
     match network.as_str() {
-        "btc" => rust_project_rudi::tokens::bitcoin::derive_address(seed, Network::Bitcoin, "m/44'/0'/0'/0/0")
+        "btc" => rust_project_rudi::tokens::bitcoin::derive_address(seed, Network::Testnet, "m/44'/0'/0'/0/0")
             .map_err(|e| e.to_string()),
         "sol" => rust_project_rudi::tokens::solana::derive_address(seed)
             .map_err(|e| e.to_string()),
@@ -117,7 +117,7 @@ async fn get_balance(
 
     match network.as_str() {
         "btc" => {
-            let address = rust_project_rudi::tokens::bitcoin::derive_address(&seed, Network::Bitcoin, "m/44'/0'/0'/0/0")
+            let address = rust_project_rudi::tokens::bitcoin::derive_address(&seed, Network::Testnet, "m/44'/0'/0'/0/0")
             .map_err(|e| e.to_string())?;
             rust_project_rudi::networks::btc::bitcoin_network::get_btc_balance(&address).await
                 .map_err(|e| e.to_string())
@@ -162,9 +162,9 @@ async fn send_transaction(
     };
     match network.as_str() {
         "btc" => {
-            let private_key = rust_project_rudi::tokens::bitcoin::derive_private_key(&seed, Network::Bitcoin, "m/44'/0'/0'/0/0")
+            let private_key = rust_project_rudi::tokens::bitcoin::derive_private_key(&seed, Network::Testnet, "m/44'/0'/0'/0/0")
                 .map_err(|e| e.to_string())?;
-            let sender_address = rust_project_rudi::tokens::bitcoin::derive_address(&seed, Network::Bitcoin, "m/44'/0'/0'/0/0")                .map_err(|e| e.to_string())?;
+            let sender_address = rust_project_rudi::tokens::bitcoin::derive_address(&seed, Network::Testnet, "m/44'/0'/0'/0/0")                .map_err(|e| e.to_string())?;
 
             rust_project_rudi::helpers::making_tx::Network::Btc.send(
                 rust_project_rudi::helpers::making_tx::Key::Btc(private_key),
@@ -215,7 +215,7 @@ fn get_receive_address(
     let seed = seed_guard.as_ref().ok_or("Wallet is locked")?;
 
     match network.as_str() {
-        "btc" => rust_project_rudi::tokens::bitcoin::derive_address(seed, Network::Bitcoin, "m/44'/0'/0'/0/0")
+        "btc" => rust_project_rudi::tokens::bitcoin::derive_address(seed, Network::Testnet, "m/44'/0'/0'/0/0")
             .map_err(|e| e.to_string()),
         "sol" => rust_project_rudi::tokens::solana::derive_address(seed)
             .map_err(|e| e.to_string()),
@@ -238,7 +238,7 @@ async fn get_transaction_history(
 
     match network.as_str() {
         "btc" => {
-            let address = rust_project_rudi::tokens::bitcoin::derive_address(&seed, Network::Bitcoin, "m/44'/0'/0'/0/0")
+            let address = rust_project_rudi::tokens::bitcoin::derive_address(&seed, Network::Testnet, "m/44'/0'/0'/0/0")
                 .map_err(|e| e.to_string())?;
             rust_project_rudi::networks::btc::bitcoin_network::fetch_btc_history(&address, since_txid)
                 .await
