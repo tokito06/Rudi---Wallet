@@ -207,6 +207,13 @@ async fn send_transaction(
 }
 
 #[tauri::command]
+async fn broadcast_tx(tx_hex: String) -> Result<String, String> {
+    rust_project_rudi::networks::btc::bitcoin_network::broadcast_tx(&tx_hex)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 fn get_receive_address(
     state: State<AppState>,
     network: String,
@@ -292,7 +299,8 @@ pub fn run() {
             get_eth_balance,
             send_transaction,
             get_receive_address,
-            get_transaction_history,   
+            get_transaction_history,
+            broadcast_tx,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
