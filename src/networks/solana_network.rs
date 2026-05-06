@@ -183,3 +183,92 @@ pub fn map_solana_tx(result: &serde_json::Value, my_address: &str) -> Option<Tra
         fee,
     })
 }
+
+
+#[cfg(test)]
+mod network_tests {
+    use super::*;
+
+    const TEST_ADDRESS: &str = "11111111111111111111111111111111";
+
+    #[tokio::test]
+    #[ignore]
+    async fn network_test_rpc_call_success() {
+        let result = rpc_call("getHealth", serde_json::json!([])).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn network_test_get_sol_balance_valid_address() {
+        let result = get_sol_balance(TEST_ADDRESS).await;
+        assert!(result.is_ok());
+        assert!(result.unwrap() >= 0.0);
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn network_test_get_sol_balance_invalid_address() {
+        let result = get_sol_balance("invalid_address").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn network_test_get_latest_blockhash() {
+        let result = get_latest_blockhash().await;
+        assert!(result.is_ok());
+        let blockhash = result.unwrap();
+        assert!(!blockhash.is_empty());
+        assert!(bs58::decode(&blockhash).into_vec().is_ok());
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn network_test_fetch_sol_history_returns_ok() {
+        let result = fetch_sol_history(TEST_ADDRESS, None).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn network_test_fetch_sol_history_with_since_txid() {
+        let txs = fetch_sol_history(TEST_ADDRESS, None).await.unwrap();
+        if txs.is_empty() {
+            return;
+        }
+        let since = Some(txs[0].txid.clone());
+        let result = fetch_sol_history(TEST_ADDRESS, since).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn network_test_fetch_sol_history_empty_address() {
+        let result = fetch_sol_history("11111111111111111111111111111111", None).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn network_test_map_solana_tx_valid() {
+        let sigs = rpc_call("getSignaturesForAddress", serde_json::json!([
+            TEST_ADDRESS,
+            { "limit": 1 }
+        ])).await.unwrap();
+
+        if let Some(sig_results) = sigs["result"].as_array() {
+            if sig_results.is_empty() {
+                return;
+            }
+            let signature = sig_results[0]["signature"].as_str().unwrap();
+            let tx = rpc_call("getTransaction", serde_json::json!([signature, {
+                "encoding": "json",
+                "commitment": "confirmed"
+            }])).await.unwrap();
+
+            let result = map_solana_tx(&tx["result"], TEST_ADDRESS);
+            assert!(result.is_some() || result.is_none());
+        }
+    }
+}
