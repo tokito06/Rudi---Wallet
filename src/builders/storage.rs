@@ -41,6 +41,15 @@ pub fn wallet_exists() -> bool {
 }
 
 pub fn save_wallet(mnemonic: &str, password: &str) -> Result<()> {
+    let path = wallet_path();
+
+    #[cfg(windows)]
+    if path.exists() {
+        let mut perms = fs::metadata(&path)?.permissions();
+        perms.set_readonly(false);
+        fs::set_permissions(&path, perms)?;
+    }
+
     let data = WalletData { mnemonic: mnemonic.to_string() };
     let plaintext = serde_json::to_vec(&data)?;
 
@@ -69,9 +78,21 @@ pub fn save_wallet(mnemonic: &str, password: &str) -> Result<()> {
         encrypted: hex::encode(ciphertext),
     };
 
-    let path = wallet_path();
     fs::write(&path, serde_json::to_string_pretty(&file)?)
         .with_context(|| format!("Could not write to {:?}", path))?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
+    }
+
+    #[cfg(windows)]
+    {
+        let mut perms = fs::metadata(&path)?.permissions();
+        perms.set_readonly(true);
+        fs::set_permissions(&path, perms)?;
+    }
 
     Ok(())
 }

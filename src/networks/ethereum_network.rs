@@ -6,68 +6,69 @@ use alloy::{
 };
 use alloy::signers::local::PrivateKeySigner;
 use anyhow::Result;
-use reqwest::blocking::Client;
+use once_cell::sync::Lazy;
+use reqwest::Client;
 use crate::helpers::types::{Transaction, Direction, Status};
 use crate::helpers::making_tx::Network;
 
+const ETH_RPC_URL: &str = "https://ethereum-sepolia-rpc.publicnode.com";
+const ETH_HISTORY_URL: &str = "https://eth-sepolia.blockscout.com/api";
+const ETH_CHAIN_ID: u64 = 11155111;
+const WEI_PER_ETH: u128 = 1_000_000_000_000_000_000;
+
+static CLIENT: Lazy<Client> = Lazy::new(Client::new);
 
 pub async fn get_provider() -> Result<impl Provider> {
     let provider = ProviderBuilder::new()
-        .connect("https://ethereum-sepolia-rpc.publicnode.com").await?;
+        .connect(ETH_RPC_URL)
+        .await?;
     Ok(provider)
 }
 
-pub async fn get_eth_balance(address: &str)-> Result<f64>{
+pub async fn get_eth_balance(address: &str) -> Result<f64> {
     let provider = get_provider().await?;
     let address: Address = address.parse()?;
     let balance = provider.get_balance(address).await?;
-    Ok(balance.to::<u128>() as f64 / 1_000_000_000_000_000_000.0)
+    Ok(balance.to::<u128>() as f64 / WEI_PER_ETH as f64)
 }
-
-pub async fn calculate_gas(from: &str, to: &str, value: U256) -> Result<u128> {
-    let provider = get_provider().await?;
-    let from_address: Address = from.parse()?;
-    let to_address: Address = to.parse()?;
-    let trans_request = TransactionRequest::default()
-        .with_from(from_address)
-        .with_to(to_address)
-        .with_value(value);
-    let gas = provider.estimate_gas(trans_request).await?;
-    Ok(gas as u128)
-}
-    
 
 pub async fn send_eth(signer: PrivateKeySigner, recipient: &str, amount_eth: f64) -> Result<String> {
     let to_address: Address = recipient.parse()?;
     let from_address = signer.address();
-
-    let amount_wei = U256::from((amount_eth * 1_000_000_000_000_000_000.0) as u128);
+    let amount_wei = U256::from((amount_eth * WEI_PER_ETH as f64) as u128);
 
     let wallet = EthereumWallet::from(signer);
     let provider = ProviderBuilder::new()
+        .with_chain_id(ETH_CHAIN_ID)
         .wallet(wallet)
-        .connect("https://ethereum-sepolia-rpc.publicnode.com").await?;
+        .connect(ETH_RPC_URL)
+        .await?;
 
-    let gas = calculate_gas(&from_address.to_string(), recipient, amount_wei).await?;
+    let gas = provider.estimate_gas(
+        TransactionRequest::default()
+            .with_from(from_address)
+            .with_to(to_address)
+            .with_value(amount_wei)
+    ).await?;
 
     let transaction = TransactionRequest::default()
         .with_to(to_address)
         .with_from(from_address)
         .with_value(amount_wei)
-        .with_gas_limit(gas as u64);
- 
+        .with_gas_limit(gas);
+
     let transaction_hash = provider.send_transaction(transaction).await?;
-    
+
     Ok(transaction_hash.tx_hash().to_string())
 }
 
-pub fn fetch_eth_history(address: &str, since_txid: Option<String>) -> Result<Vec<Transaction>> {
-    let client = Client::new();
+pub async fn fetch_eth_history(address: &str, since_txid: Option<String>) -> Result<Vec<Transaction>> {
     let url = format!(
-        "https://eth-sepolia.blockscout.com/api?module=account&action=txlist&address={}&sort=desc",
-        address
+        "{}?module=account&action=txlist&address={}&sort=desc",
+        ETH_HISTORY_URL, address
     );
-    let resp: serde_json::Value = client.get(&url).send()?.json()?;
+
+    let resp: serde_json::Value = CLIENT.get(&url).send().await?.json().await?;
     let raw_txs = resp["result"].as_array().cloned().unwrap_or_default();
     let mut txs = vec![];
 
@@ -79,6 +80,7 @@ pub fn fetch_eth_history(address: &str, since_txid: Option<String>) -> Result<Ve
             txs.push(transaction);
         }
     }
+
     Ok(txs)
 }
 
@@ -93,13 +95,12 @@ pub fn map_ethereum_tx(result: &serde_json::Value, my_address: &str) -> Option<T
         Direction::Received
     };
 
-
     let value_wei: u128 = result["value"].as_str()?.parse().ok()?;
-    let amount = value_wei as f64 / 1_000_000_000_000_000_000.0;
+    let amount = value_wei as f64 / WEI_PER_ETH as f64;
 
     let gas_used: u128 = result["gasUsed"].as_str()?.parse().ok()?;
     let gas_price: u128 = result["gasPrice"].as_str()?.parse().ok()?;
-    let fee = (gas_used * gas_price) as f64 / 1_000_000_000_000_000_000.0;
+    let fee = (gas_used * gas_price) as f64 / WEI_PER_ETH as f64;
 
     let status = if result["isError"].as_str().unwrap_or("0") == "0" {
         Status::Success
