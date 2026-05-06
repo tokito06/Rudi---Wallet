@@ -1,0 +1,11 @@
+{
+  "name": "rudi-wallet-frontend",
+  "version": "0.1.0",
+  "scripts": {
+    "dev": "tailwindcss -i ./src/style.css -o ./dist/output.css --watch",
+    "build": "tailwindcss -i ./src/style.css -o ./dist/output.css --minify"
+  },
+  "devDependencies": {
+    "tailwindcss": "^3.4.0"
+  }
+}
