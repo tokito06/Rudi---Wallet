@@ -1,5 +1,6 @@
 use tauri::State;
 use std::sync::Mutex;
+use bitcoin::Network;
 
 // Session state — holds decrypted seed in RAM
 pub struct AppState {
@@ -28,7 +29,7 @@ fn create_wallet(
         .map_err(|e| e.to_string())?;
 
     // store seed in session
-    let seed = wallet.seed_bytes().map_err(|e| e.to_string())?;
+    let seed = wallet.seed_bytes("").map_err(|e| e.to_string())?;
     *state.seed.lock().unwrap() = Some(seed);
     *state.password.lock().unwrap() = Some(password);
 
@@ -59,7 +60,7 @@ fn import_wallet(
     rust_project_rudi::builders::storage::save_wallet(mnemonic_trimmed, &password)
         .map_err(|e| e.to_string())?;
     
-    let seed = wallet.seed_bytes().map_err(|e| e.to_string())?;
+    let seed = wallet.seed_bytes("").map_err(|e| e.to_string())?;
     *state.seed.lock().unwrap() = Some(seed);
     *state.password.lock().unwrap() = Some(password);
     
@@ -77,7 +78,7 @@ fn unlock_wallet(
     let wallet = rust_project_rudi::builders::wallet::Wallet::from_mnemonic(&loaded.mnemonic)
         .map_err(|e| e.to_string())?;
 
-    let seed = wallet.seed_bytes().map_err(|e| e.to_string())?;
+    let seed = wallet.seed_bytes("").map_err(|e| e.to_string())?;
 
     *state.seed.lock().unwrap() = Some(seed);
     *state.password.lock().unwrap() = Some(password);
@@ -94,7 +95,7 @@ fn get_address(
     let seed = seed_guard.as_ref().ok_or("Wallet is locked")?;
 
     match network.as_str() {
-        "btc" => rust_project_rudi::tokens::bitcoin::derive_address(seed)
+        "btc" => rust_project_rudi::tokens::bitcoin::derive_address(seed, Network::Bitcoin, "m/44'/0'/0'/0/0")
             .map_err(|e| e.to_string()),
         "sol" => rust_project_rudi::tokens::solana::derive_address(seed)
             .map_err(|e| e.to_string()),
@@ -105,24 +106,26 @@ fn get_address(
 }
 
 #[tauri::command]
-fn get_balance(
-    state: State<AppState>,
+async fn get_balance(
+    state: State<'_, AppState>,
     network: String,
 ) -> Result<f64, String> {
-    let seed_guard = state.seed.lock().unwrap();
-    let seed = seed_guard.as_ref().ok_or("Wallet is locked")?;
+    let seed = {
+        let guard = state.seed.lock().unwrap();
+        guard.as_ref().ok_or("Wallet is locked")?.clone()
+    };
 
     match network.as_str() {
         "btc" => {
-            let address = rust_project_rudi::tokens::bitcoin::derive_address(seed)
-                .map_err(|e| e.to_string())?;
-            rust_project_rudi::networks::btc::bitcoin_network::get_btc_balance(&address)
+            let address = rust_project_rudi::tokens::bitcoin::derive_address(&seed, Network::Bitcoin, "m/44'/0'/0'/0/0")
+            .map_err(|e| e.to_string())?;
+            rust_project_rudi::networks::btc::bitcoin_network::get_btc_balance(&address).await
                 .map_err(|e| e.to_string())
         }
         "sol" => {
-            let address = rust_project_rudi::tokens::solana::derive_address(seed)
+            let address = rust_project_rudi::tokens::solana::derive_address(&seed)
                 .map_err(|e| e.to_string())?;
-            rust_project_rudi::networks::solana_network::get_sol_balance(&address)
+            rust_project_rudi::networks::solana_network::get_sol_balance(&address).await
                 .map_err(|e| e.to_string())
         }
         _ => Err("Unknown network".to_string()),
@@ -147,21 +150,21 @@ async fn get_eth_balance(
 
 
 #[tauri::command]
-fn send_transaction(
-    state: State<AppState>,
+async fn send_transaction(
+    state: State<'_, AppState>,
     network: String,
     recipient: String,
     amount: f64,
 ) -> Result<String, String> {
-    let seed_guard = state.seed.lock().unwrap();
-    let seed = seed_guard.as_ref().ok_or("Wallet is locked")?;
-
+    let seed = {
+        let guard = state.seed.lock().unwrap();
+        guard.as_ref().ok_or("Wallet is locked")?.clone()
+    };
     match network.as_str() {
         "btc" => {
-            let private_key = rust_project_rudi::tokens::bitcoin::derive_private_key(seed)
+            let private_key = rust_project_rudi::tokens::bitcoin::derive_private_key(&seed, Network::Bitcoin, "m/44'/0'/0'/0/0")
                 .map_err(|e| e.to_string())?;
-            let sender_address = rust_project_rudi::tokens::bitcoin::derive_address(seed)
-                .map_err(|e| e.to_string())?;
+            let sender_address = rust_project_rudi::tokens::bitcoin::derive_address(&seed, Network::Bitcoin, "m/44'/0'/0'/0/0")                .map_err(|e| e.to_string())?;
 
             rust_project_rudi::helpers::making_tx::Network::Btc.send(
                 rust_project_rudi::helpers::making_tx::Key::Btc(private_key),
@@ -169,12 +172,12 @@ fn send_transaction(
                 &recipient,
                 amount,
                 &sender_address,
-            ).map_err(|e| e.to_string())
+            ).await.map_err(|e| e.to_string())
         }
         "sol" => {
-            let keypair = rust_project_rudi::tokens::solana::derive_private_key(seed)
+            let keypair = rust_project_rudi::tokens::solana::derive_private_key(&seed)
                 .map_err(|e| e.to_string())?;
-            let sender_address = rust_project_rudi::tokens::solana::derive_address(seed)
+            let sender_address = rust_project_rudi::tokens::solana::derive_address(&seed)
                 .map_err(|e| e.to_string())?;
 
             rust_project_rudi::helpers::making_tx::Network::Sol.send(
@@ -183,12 +186,12 @@ fn send_transaction(
                 &recipient,
                 amount,
                 &sender_address,
-            ).map_err(|e| e.to_string())
+            ).await.map_err(|e| e.to_string())
         }
         "eth" => {
-            let signer = rust_project_rudi::tokens::ethereum::derive_private_key(seed)
+            let signer = rust_project_rudi::tokens::ethereum::derive_private_key(&seed)
                 .map_err(|e| e.to_string())?;
-            let sender_address = rust_project_rudi::tokens::ethereum::derive_address(seed)
+            let sender_address = rust_project_rudi::tokens::ethereum::derive_address(&seed)
                 .map_err(|e| e.to_string())?;
 
             rust_project_rudi::helpers::making_tx::Network::Eth.send(
@@ -197,7 +200,7 @@ fn send_transaction(
                 &recipient,
                 amount,
                 &sender_address,
-            ).map_err(|e| e.to_string())
+            ).await.map_err(|e| e.to_string())
         }
         _ => Err("Unknown network".to_string()),
     }
@@ -212,7 +215,7 @@ fn get_receive_address(
     let seed = seed_guard.as_ref().ok_or("Wallet is locked")?;
 
     match network.as_str() {
-        "btc" => rust_project_rudi::tokens::bitcoin::derive_address(seed)
+        "btc" => rust_project_rudi::tokens::bitcoin::derive_address(seed, Network::Bitcoin, "m/44'/0'/0'/0/0")
             .map_err(|e| e.to_string()),
         "sol" => rust_project_rudi::tokens::solana::derive_address(seed)
             .map_err(|e| e.to_string()),
@@ -223,31 +226,36 @@ fn get_receive_address(
 }
 
 #[tauri::command]
-fn get_transaction_history(
-    state: State<AppState>,
+async fn get_transaction_history(
+    state: State<'_,AppState>,
     network: String,
     since_txid: Option<String>,
 ) -> Result<Vec<rust_project_rudi::helpers::types::Transaction>, String> {
-    let seed_guard = state.seed.lock().unwrap();
-    let seed = seed_guard.as_ref().ok_or("Wallet is locked")?;
+    let seed = {
+        let guard = state.seed.lock().unwrap();
+        guard.as_ref().ok_or("Wallet is locked")?.clone()
+    };
 
     match network.as_str() {
         "btc" => {
-            let address = rust_project_rudi::tokens::bitcoin::derive_address(seed)
+            let address = rust_project_rudi::tokens::bitcoin::derive_address(&seed, Network::Bitcoin, "m/44'/0'/0'/0/0")
                 .map_err(|e| e.to_string())?;
             rust_project_rudi::networks::btc::bitcoin_network::fetch_btc_history(&address, since_txid)
+                .await
                 .map_err(|e| e.to_string())
         }
         "sol" => {
-            let address = rust_project_rudi::tokens::solana::derive_address(seed)
+            let address = rust_project_rudi::tokens::solana::derive_address(&seed)
                 .map_err(|e| e.to_string())?;
             rust_project_rudi::networks::solana_network::fetch_sol_history(&address, since_txid)
+                .await
                 .map_err(|e| e.to_string())
         }
         "eth" => {
-            let address = rust_project_rudi::tokens::ethereum::derive_address(seed)
+            let address = rust_project_rudi::tokens::ethereum::derive_address(&seed)
                 .map_err(|e| e.to_string())?;
             rust_project_rudi::networks::ethereum_network::fetch_eth_history(&address, since_txid)
+                .await
                 .map_err(|e| e.to_string())
         }
         _ => Err("Unknown network".to_string()),
