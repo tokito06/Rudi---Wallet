@@ -40,7 +40,18 @@ pub fn wallet_exists() -> bool {
     wallet_path().exists()
 }
 
+fn validate_wallet_password_strength(password: &str) -> Result<()> {
+     if !password::strong_password(password) {
+            anyhow::bail!(
+                "Password must include uppercase, lowercase, numeric, and special characters"
+            );
+    }
+    Ok(())
+}
+
 pub fn save_wallet(mnemonic: &str, password: &str) -> Result<()> {
+    validate_wallet_password_strength(password)?;
+
     let path = wallet_path();
 
     #[cfg(windows)]
