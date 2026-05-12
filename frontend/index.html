@@ -34,7 +34,7 @@
             }
         }
         
-        function showWelcomeScreen(invoke) {
+        function showWelcomeScreen(invoke, sessionExpired = false) {
             document.getElementById('app').innerHTML = /*html*/`
                 <div class="min-h-screen flex items-center justify-center bg-[#0d0d14]">
                     <div class="w-full max-w-lg px-6 py-12 flex flex-col items-center gap-8">
@@ -50,6 +50,10 @@
                                 <h1 class="text-xl font-semibold text-white mb-1">Welcome to our wallet!</h1>
                                 <p class="text-sm text-[#6b6b8a]">Write down your password</p>
                             </div>
+                            ${sessionExpired ? `
+                            <div class="mt-2 px-4 py-2 rounded-xl bg-amber-900/30 border border-amber-500/30 text-amber-400 text-xs text-center">
+                                Session expired after inactivity. Please unlock again.
+                            </div>` : ''}
                         </div>
 
                         <div class="w-full relative">
@@ -295,6 +299,16 @@
             document.getElementById('cancelBtn').onclick = () => showWelcomeScreen(invoke);
         }
 
+        // Returns true if the error string indicates session expiry.
+        function isSessionExpired(err) {
+            return String(err).toLowerCase().includes('session expired');
+        }
+
+        // Called whenever a command returns a session-expired error.
+        function handleSessionExpired(invoke) {
+            showWelcomeScreen(invoke, true);
+        }
+
         function getSidebar(activePage) {
             const navItems = [
                 { id: 'nav-home', label: 'Home', icon: '<path d="M2 8.5L8 3l6 5.5V15h-4v-4H6v4H2V8.5z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" fill="none"/>' },
@@ -307,10 +321,10 @@
                 <div class="flex flex-col bg-[#0d0d14] border-r border-[#1a1a2e] w-48 py-5 px-3 flex-shrink-0">
                     <div class="flex items-center gap-2 px-2 mb-8">
                         <div class="flex items-center gap-2 px-2 mb-8">
-                            <img 
-                                src="/assets/logo.svg" 
-                                width="28" 
-                                height="28" 
+                            <img
+                                src="/assets/logo.svg"
+                                width="28"
+                                height="28"
                                 alt="Logo"
                                 class="w-7 h-7"
                             >
@@ -326,6 +340,14 @@
                             </button>
                         `).join('')}
                     </nav>
+
+                    <button id="nav-lock" class="flex items-center gap-3 px-3 py-2.5 rounded-xl cursor-pointer transition-all text-left w-full text-[#6b6b8a] hover:text-red-400 hover:bg-[#141422] mt-2">
+                        <svg width="18" height="18" viewBox="0 0 16 16" fill="none">
+                            <rect x="3" y="7" width="10" height="8" rx="1.5" stroke="currentColor" stroke-width="1.4" fill="none"/>
+                            <path d="M5 7V5a3 3 0 0 1 6 0v2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+                        </svg>
+                        <span class="text-sm font-medium">Lock</span>
+                    </button>
                 </div>
             `;
         }
@@ -339,7 +361,7 @@
 
         function setupNavigation(invoke, password, currentScreen) {
             const navButtons = ['nav-home', 'nav-send', 'nav-receive', 'nav-history'];
-            
+
             navButtons.forEach(btnId => {
                 const btn = document.getElementById(btnId);
                 if (btn) {
@@ -351,11 +373,13 @@
                     };
                 }
             });
-            
-            
-            const profileBtn = document.getElementById('profileBtn');
-            if (profileBtn) {
-                profileBtn.onclick = () => alert('Profile / Settings coming soon');
+
+            const lockBtn = document.getElementById('nav-lock');
+            if (lockBtn) {
+                lockBtn.onclick = async () => {
+                    try { await invoke('lock_wallet'); } catch(_) {}
+                    showWelcomeScreen(invoke);
+                };
             }
         }
 
@@ -504,6 +528,7 @@
                     if (addrEl) addrEl.textContent = formatAddr(addr);
                     updateTotalBalance();
                 } catch(e) {
+                    if (isSessionExpired(e)) { handleSessionExpired(invoke); return; }
                     const balEl = document.getElementById(balanceElId);
                     if (balEl) balEl.textContent = 'Error';
                 }
@@ -591,6 +616,7 @@
                     }).join('');
 
                 } catch(e) {
+                    if (isSessionExpired(e)) { handleSessionExpired(invoke); return; }
                     const list = document.getElementById('recentTxList');
                     if (list) list.innerHTML = `<p class="text-red-400 text-xs px-1">Failed to load transactions</p>`;
                 }
@@ -806,6 +832,7 @@
                     }
                     updateSendBtn();
                 } catch(e) {
+                    if (isSessionExpired(e)) { handleSessionExpired(invoke); return; }
                     showStatus('Error: ' + e, true);
                 } finally {
                     btn.textContent = 'Send';
@@ -962,6 +989,7 @@
                         });
                     };
                 } catch(e) {
+                    if (isSessionExpired(e)) { handleSessionExpired(invoke); return; }
                     document.getElementById('addressText').textContent = 'Error: ' + e;
                     document.getElementById('qrContainer').innerHTML = '<p class="text-red-400 text-xs text-center p-2">Failed to load address</p>';
                 }
@@ -1176,6 +1204,7 @@
 
                 renderTxs(allTxs);
             } catch(e) {
+                if (isSessionExpired(e)) { handleSessionExpired(invoke); return; }
                 showError('Failed to load transactions: ' + e);
             } finally {
                 loading = false;

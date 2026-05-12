@@ -1,3 +1,6 @@
+use std::time::Instant;
+use zeroize::Zeroize;
+
 pub struct Session {
     pub seed: Vec<u8>,
     pub unlocked_at: Instant,

@@ -1,11 +1,24 @@
 use tauri::State;
 use std::sync::Mutex;
 use bitcoin::Network;
+use rust_project_rudi::session::Session;
 
-// Session state — holds decrypted seed in RAM
 pub struct AppState {
-    pub seed: Mutex<Option<Vec<u8>>>,
+    pub session: Mutex<Option<Session>>,
     pub password: Mutex<Option<String>>,
+}
+
+// Extracts the seed from an active, non-expired session, refreshing its timeout.
+fn get_seed(session_lock: &Mutex<Option<Session>>) -> Result<Vec<u8>, String> {
+    let mut guard = session_lock.lock().unwrap();
+    let expired = guard.as_ref().map_or(true, |s| s.is_expired());
+    if expired {
+        *guard = None;
+        return Err("Session expired. Please unlock your wallet.".to_string());
+    }
+    let seed = guard.as_ref().unwrap().seed.clone();
+    guard.as_mut().unwrap().refresh();
+    Ok(seed)
 }
 
 // ── Commands ──────────────────────────────────────────────────────────────────
@@ -20,20 +33,16 @@ fn create_wallet(
     state: State<AppState>,
     password: String,
 ) -> Result<Vec<String>, String> {
-    // generate wallet
     let wallet = rust_project_rudi::builders::wallet::Wallet::generate()
         .map_err(|e| e.to_string())?;
 
-    // save encrypted to disk
     rust_project_rudi::builders::storage::save_wallet(&wallet.mnemonic, &password)
         .map_err(|e| e.to_string())?;
 
-    // store seed in session
     let seed = wallet.seed_bytes("").map_err(|e| e.to_string())?;
-    *state.seed.lock().unwrap() = Some(seed);
+    *state.session.lock().unwrap() = Some(Session::new(seed));
     *state.password.lock().unwrap() = Some(password);
 
-    // return seed words to show to user
     let words: Vec<String> = wallet.mnemonic
         .split_whitespace()
         .map(|w| w.to_string())
@@ -53,17 +62,17 @@ fn import_wallet(
     if word_count != 12 && word_count != 24 {
         return Err("Invalid seed phrase. Must be 12 or 24 words.".to_string());
     }
-    
+
     let wallet = rust_project_rudi::builders::wallet::Wallet::from_mnemonic(mnemonic_trimmed)
         .map_err(|e| e.to_string())?;
-    
+
     rust_project_rudi::builders::storage::save_wallet(mnemonic_trimmed, &password)
         .map_err(|e| e.to_string())?;
-    
+
     let seed = wallet.seed_bytes("").map_err(|e| e.to_string())?;
-    *state.seed.lock().unwrap() = Some(seed);
+    *state.session.lock().unwrap() = Some(Session::new(seed));
     *state.password.lock().unwrap() = Some(password);
-    
+
     Ok(true)
 }
 
@@ -79,11 +88,28 @@ fn unlock_wallet(
         .map_err(|e| e.to_string())?;
 
     let seed = wallet.seed_bytes("").map_err(|e| e.to_string())?;
-
-    *state.seed.lock().unwrap() = Some(seed);
+    *state.session.lock().unwrap() = Some(Session::new(seed));
     *state.password.lock().unwrap() = Some(password);
 
     Ok(true)
+}
+
+#[tauri::command]
+fn check_session(state: State<AppState>) -> bool {
+    let mut guard = state.session.lock().unwrap();
+    let expired = guard.as_ref().map_or(true, |s| s.is_expired());
+    if expired {
+        *guard = None;
+        return false;
+    }
+    guard.as_mut().unwrap().refresh();
+    true
+}
+
+#[tauri::command]
+fn lock_wallet(state: State<AppState>) {
+    *state.session.lock().unwrap() = None;
+    *state.password.lock().unwrap() = None;
 }
 
 #[tauri::command]
@@ -91,15 +117,14 @@ fn get_address(
     state: State<AppState>,
     network: String,
 ) -> Result<String, String> {
-    let seed_guard = state.seed.lock().unwrap();
-    let seed = seed_guard.as_ref().ok_or("Wallet is locked")?;
+    let seed = get_seed(&state.session)?;
 
     match network.as_str() {
-        "btc" => rust_project_rudi::tokens::bitcoin::derive_address(seed, Network::Testnet, "m/44'/0'/0'/0/0")
+        "btc" => rust_project_rudi::tokens::bitcoin::derive_address(&seed, Network::Testnet, "m/44'/0'/0'/0/0")
             .map_err(|e| e.to_string()),
-        "sol" => rust_project_rudi::tokens::solana::derive_address(seed)
+        "sol" => rust_project_rudi::tokens::solana::derive_address(&seed)
             .map_err(|e| e.to_string()),
-        "eth" => rust_project_rudi::tokens::ethereum::derive_address(seed)
+        "eth" => rust_project_rudi::tokens::ethereum::derive_address(&seed)
             .map_err(|e| e.to_string()),
         _ => Err("Unknown network".to_string()),
     }
@@ -110,15 +135,12 @@ async fn get_balance(
     state: State<'_, AppState>,
     network: String,
 ) -> Result<f64, String> {
-    let seed = {
-        let guard = state.seed.lock().unwrap();
-        guard.as_ref().ok_or("Wallet is locked")?.clone()
-    };
+    let seed = get_seed(&state.session)?;
 
     match network.as_str() {
         "btc" => {
             let address = rust_project_rudi::tokens::bitcoin::derive_address(&seed, Network::Testnet, "m/44'/0'/0'/0/0")
-            .map_err(|e| e.to_string())?;
+                .map_err(|e| e.to_string())?;
             rust_project_rudi::networks::btc::bitcoin_network::get_btc_balance(&address).await
                 .map_err(|e| e.to_string())
         }
@@ -129,16 +151,14 @@ async fn get_balance(
                 .map_err(|e| e.to_string())
         }
         _ => Err("Unknown network".to_string()),
-}}
+    }
+}
 
 #[tauri::command]
 async fn get_eth_balance(
     state: State<'_, AppState>,
 ) -> Result<f64, String> {
-    let seed = {
-        let guard = state.seed.lock().unwrap();
-        guard.as_ref().ok_or("Wallet is locked")?.clone()
-    };
+    let seed = get_seed(&state.session)?;
 
     let address = rust_project_rudi::tokens::ethereum::derive_address(&seed)
         .map_err(|e| e.to_string())?;
@@ -148,7 +168,6 @@ async fn get_eth_balance(
         .map_err(|e| e.to_string())
 }
 
-
 #[tauri::command]
 async fn send_transaction(
     state: State<'_, AppState>,
@@ -156,15 +175,14 @@ async fn send_transaction(
     recipient: String,
     amount: f64,
 ) -> Result<String, String> {
-    let seed = {
-        let guard = state.seed.lock().unwrap();
-        guard.as_ref().ok_or("Wallet is locked")?.clone()
-    };
+    let seed = get_seed(&state.session)?;
+
     match network.as_str() {
         "btc" => {
             let private_key = rust_project_rudi::tokens::bitcoin::derive_private_key(&seed, Network::Testnet, "m/44'/0'/0'/0/0")
                 .map_err(|e| e.to_string())?;
-            let sender_address = rust_project_rudi::tokens::bitcoin::derive_address(&seed, Network::Testnet, "m/44'/0'/0'/0/0")                .map_err(|e| e.to_string())?;
+            let sender_address = rust_project_rudi::tokens::bitcoin::derive_address(&seed, Network::Testnet, "m/44'/0'/0'/0/0")
+                .map_err(|e| e.to_string())?;
 
             rust_project_rudi::helpers::making_tx::Network::Btc.send(
                 rust_project_rudi::helpers::making_tx::Key::Btc(private_key),
@@ -218,15 +236,14 @@ fn get_receive_address(
     state: State<AppState>,
     network: String,
 ) -> Result<String, String> {
-    let seed_guard = state.seed.lock().unwrap();
-    let seed = seed_guard.as_ref().ok_or("Wallet is locked")?;
+    let seed = get_seed(&state.session)?;
 
     match network.as_str() {
-        "btc" => rust_project_rudi::tokens::bitcoin::derive_address(seed, Network::Testnet, "m/44'/0'/0'/0/0")
+        "btc" => rust_project_rudi::tokens::bitcoin::derive_address(&seed, Network::Testnet, "m/44'/0'/0'/0/0")
             .map_err(|e| e.to_string()),
-        "sol" => rust_project_rudi::tokens::solana::derive_address(seed)
+        "sol" => rust_project_rudi::tokens::solana::derive_address(&seed)
             .map_err(|e| e.to_string()),
-        "eth" => rust_project_rudi::tokens::ethereum::derive_address(seed)
+        "eth" => rust_project_rudi::tokens::ethereum::derive_address(&seed)
             .map_err(|e| e.to_string()),
         _ => Err("Unknown network".to_string()),
     }
@@ -234,14 +251,11 @@ fn get_receive_address(
 
 #[tauri::command]
 async fn get_transaction_history(
-    state: State<'_,AppState>,
+    state: State<'_, AppState>,
     network: String,
     since_txid: Option<String>,
 ) -> Result<Vec<rust_project_rudi::helpers::types::Transaction>, String> {
-    let seed = {
-        let guard = state.seed.lock().unwrap();
-        guard.as_ref().ok_or("Wallet is locked")?.clone()
-    };
+    let seed = get_seed(&state.session)?;
 
     match network.as_str() {
         "btc" => {
@@ -275,7 +289,7 @@ async fn get_transaction_history(
 pub fn run() {
     tauri::Builder::default()
         .manage(AppState {
-            seed: Mutex::new(None),
+            session: Mutex::new(None),
             password: Mutex::new(None),
         })
         .setup(|app| {
@@ -294,6 +308,8 @@ pub fn run() {
             create_wallet,
             unlock_wallet,
             import_wallet,
+            check_session,
+            lock_wallet,
             get_address,
             get_balance,
             get_eth_balance,
