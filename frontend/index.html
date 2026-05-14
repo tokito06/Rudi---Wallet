@@ -1,0 +1,1241 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RuDi Wallet</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-[#0d0d14]">
+    <div id="app"></div>
+
+    <script>
+        async function init() {
+            let retries = 0;
+            while (!window.__TAURI__ && retries < 30) {
+                await new Promise(r => setTimeout(r, 100));
+                retries++;
+            }
+            
+            if (!window.__TAURI__) {
+                document.getElementById('app').innerHTML = '<div class="text-red-500 p-4">Tauri API issue</div>';
+                return;
+            }
+            
+            const { invoke } = window.__TAURI__.core;
+            
+            try {
+                const exists = await invoke('wallet_exists');
+
+            showWelcomeScreen(invoke);
+
+            } catch(err) {
+                document.getElementById('app').innerHTML = `<div class="text-red-500 p-4">Error: ${err}</div>`;
+            }
+        }
+        
+        function showWelcomeScreen(invoke, sessionExpired = false) {
+            document.getElementById('app').innerHTML = /*html*/`
+                <div class="min-h-screen flex items-center justify-center bg-[#0d0d14]">
+                    <div class="w-full max-w-lg px-6 py-12 flex flex-col items-center gap-8">
+
+                        <div class="flex flex-col items-center gap-4">
+                            <img 
+                                src="/assets/logo.svg" 
+                                width="256" 
+                                height="256" 
+                                alt="Logo"
+                            >
+                            <div class="text-center">
+                                <h1 class="text-xl font-semibold text-white mb-1">Welcome to our wallet!</h1>
+                                <p class="text-sm text-[#6b6b8a]">Write down your password</p>
+                            </div>
+                            ${sessionExpired ? `
+                            <div class="mt-2 px-4 py-2 rounded-xl bg-amber-900/30 border border-amber-500/30 text-amber-400 text-xs text-center">
+                                Session expired after inactivity. Please unlock again.
+                            </div>` : ''}
+                        </div>
+
+                        <div class="w-full relative">
+                            <input
+                                type="password"
+                                id="password"
+                                placeholder="Password"
+                                class="w-full text-base outline-none bg-[#1a1a2e] border border-[#2a2a45] rounded-full py-3.5 px-6 pr-14 text-[#c8c8e8] focus:outline-none focus:ring-2 focus:ring-purple-500 transition-all"
+                            />
+
+                            <button
+                                id="unlockBtn"
+                                class="absolute right-2 top-1/2 -translate-y-1/2 w-10 h-10 rounded-full bg-gradient-to-r from-sky-400 to-purple-600 flex items-center justify-center cursor-pointer transition-opacity duration-200 hover:opacity-75"
+                            >
+                                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                                    <path d="M3 8h10M9 4l4 4-4 4" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                                </svg>
+                            </button>
+                        </div>
+
+                        <div class="w-full text-center">
+                            <h1 class="text-xl font-semibold text-white mb-5">New to our platform?</h1>
+                            <div class="flex gap-3">
+                                <button
+                                    id="importBtn"
+                                    class="flex-1 text-white text-sm font-semibold py-4 cursor-pointer rounded-full bg-gradient-to-r from-sky-400 to-purple-600 hover:opacity-75 transition-opacity duration-200"
+                                >
+                                    Import Wallet
+                                </button>
+
+                                <button
+                                    id="createBtn"
+                                    class="flex-1 text-white text-sm font-semibold py-4 cursor-pointer rounded-full bg-gradient-to-r from-purple-600 to-sky-400 hover:opacity-75 transition-opacity duration-200"
+                                >
+                                    Create New Wallet
+                                </button>
+                            </div>
+                        </div>
+
+                    </div>
+                </div>
+            `;
+
+            document.getElementById('unlockBtn').onclick = async () => {
+                const password = document.getElementById('password').value;
+                if (!password) return;
+                try {
+                    await invoke('unlock_wallet', { password });
+                    showDashboard(invoke, password);
+                } catch(e) {
+                    alert('Wrong password: ' + e);
+                }
+            };
+
+            document.getElementById('password').addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') document.getElementById('unlockBtn').click();
+            });
+
+            document.getElementById('importBtn').onclick = () => {
+                const password = document.getElementById('password').value;
+                if (!password) {
+                    alert('Enter a password first');
+                    return;
+                }
+                showImportScreen(invoke, password);
+            };
+
+            document.getElementById('createBtn').onclick = () => {
+                const password = document.getElementById('password').value;
+                if (!password) {
+                    alert('Enter a password first');
+                    return;
+                }
+                showCreateScreen(invoke, password);
+            };
+        }
+
+        function showCreateScreen(invoke, password) {
+            document.getElementById('app').innerHTML = /*html*/`
+                <div class="min-h-screen flex items-center justify-center bg-[#0d0d14] p-4">
+                    <div class="w-full max-w-lg">
+
+                        <h1 class="text-white text-xl font-bold mb-6">Make sure to remember your seed phrase!</h1>
+
+                        <div id="seedGrid" class="grid grid-cols-2 gap-3 mb-6">
+                            <div class="col-span-2 text-center text-[#6b6b8a] text-sm py-4">Generating wallet...</div>
+                        </div>
+
+                        <button id="copyBtn" class="w-full px-8 py-3 rounded-full text-white text-sm font-semibold bg-gradient-to-r from-sky-400 to-purple-600 hover:opacity-75 transition-opacity duration-200 mb-6">
+                            Copy to Clipboard
+                        </button>
+
+                        <label class="flex items-center gap-3 cursor-pointer text-white text-sm mb-6">
+                            <input type="checkbox" id="confirmCheck" class="w-5 h-5 cursor-pointer accent-purple-500"/>
+                            I have written down these words
+                        </label>
+
+                        <div class="flex gap-3">
+
+                            <button id="continueBtn" disabled class="flex-1 flex items-center justify-center gap-2 px-6 py-3 rounded-full text-white text-sm font-semibold bg-gradient-to-r from-purple-600 to-sky-400 opacity-50 cursor-not-allowed">
+                                Continue
+                                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                                    <path d="M3 8h10M9 4l4 4-4 4" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                                </svg>
+                            </button>
+                        </div>
+
+                    </div>
+                </div>
+            `;
+
+            let mnemonic = [];
+
+            invoke('create_wallet', { password })
+                .then(words => {
+                    mnemonic = words;
+                    document.getElementById('seedGrid').innerHTML = words.map((word, i) => `
+                        <div class="flex items-center justify-center py-3 px-4 rounded-full text-white text-sm font-medium bg-gradient-to-br from-[#2a2a45] to-[#1a1a2e] border border-[#3a3a55]">
+                            <span class="text-[#6b6b8a] text-xs mr-2">${i + 1}.</span>${word}
+                        </div>
+                    `).join('');
+                })
+                .catch(e => {
+                    document.getElementById('seedGrid').innerHTML = `
+                        <div class="col-span-2 text-red-400 text-sm text-center">${e}</div>
+                    `;
+                });
+
+            document.getElementById('copyBtn').onclick = () => {
+                if (!mnemonic.length) return;
+                navigator.clipboard.writeText(mnemonic.join(' '));
+                const btn = document.getElementById('copyBtn');
+                btn.textContent = 'Copied!';
+                setTimeout(() => { btn.textContent = 'Copy to Clipboard'; }, 2000);
+            };
+
+            document.getElementById('confirmCheck').onchange = (e) => {
+                const btn = document.getElementById('continueBtn');
+                if (e.target.checked) {
+                    btn.disabled = false;
+                    btn.classList.remove('opacity-50', 'cursor-not-allowed');
+                    btn.classList.add('hover:opacity-75', 'cursor-pointer');
+                } else {
+                    btn.disabled = true;
+                    btn.classList.add('opacity-50', 'cursor-not-allowed');
+                    btn.classList.remove('hover:opacity-75', 'cursor-pointer');
+                }
+            };
+
+            document.getElementById('continueBtn').onclick = () => {
+                if (document.getElementById('continueBtn').disabled) return;
+                showDashboard(invoke, password);
+            };
+        }
+
+        function showImportScreen(invoke, existingPassword) {
+            document.getElementById('app').innerHTML = /*html*/`
+                <div class="min-h-screen flex items-center justify-center bg-[#0d0d14] p-4">
+                    <div class="w-full max-w-lg">
+
+                        <h1 class="text-white text-xl font-bold mb-2">Enter your seed phrase</h1>
+                        <p class="text-[#6b6b8a] text-sm mb-6">Enter your 12 or 24 words below</p>
+
+                        <input type="hidden" id="password" value="${existingPassword}">
+
+                        <div id="seedGrid" class="grid grid-cols-2 gap-3 mb-6">
+                            ${Array.from({ length: 12 }, (_, i) => `
+                                <div class="flex items-center gap-2 bg-gradient-to-br from-[#2a2a45] to-[#1a1a2e] border border-[#3a3a55] rounded-full px-3 py-2">
+                                    <span class="text-[#6b6b8a] text-xs w-5">${i + 1}.</span>
+                                    <input type="text" class="seed-word bg-transparent text-white text-sm outline-none w-full" placeholder="" data-index="${i}">
+                                </div>
+                            `).join('')}
+                        </div>
+
+
+                        <button id="importBtn" disabled class="w-full py-3 rounded-full text-white text-sm font-semibold bg-gradient-to-r from-sky-400 to-purple-600 opacity-50 cursor-not-allowed mb-3">
+                            Import Wallet
+                        </button>
+
+                        <button id="cancelBtn" class="w-full text-gray-400 text-sm hover:text-white transition-colors">
+                            Cancel
+                        </button>
+
+                    </div>
+                </div>
+            `;
+
+            let wordCount = 12;
+
+            function getMnemonic() {
+                const inputs = document.querySelectorAll('.seed-word');
+                const words = Array.from(inputs).map(input => input.value.trim().toLowerCase());
+                return words.join(' ');
+            }
+
+            function checkComplete() {
+                const inputs = document.querySelectorAll('.seed-word');
+                const allFilled = Array.from(inputs).every(input => input.value.trim() !== '');
+                const password = document.getElementById('password').value;
+                const btn = document.getElementById('importBtn');
+                
+                if (allFilled && password) {
+                    btn.disabled = false;
+                    btn.classList.remove('opacity-50', 'cursor-not-allowed');
+                    btn.classList.add('hover:opacity-75', 'cursor-pointer');
+                } else {
+                    btn.disabled = true;
+                    btn.classList.add('opacity-50', 'cursor-not-allowed');
+                    btn.classList.remove('hover:opacity-75', 'cursor-pointer');
+                }
+            }
+
+            function autoFocusNext(e) {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    const index = parseInt(e.target.dataset.index);
+                    const nextInput = document.querySelector(`.seed-word[data-index="${index + 1}"]`);
+                    if (nextInput) {
+                        nextInput.focus();
+                    }
+                }
+            }
+
+            document.querySelectorAll('.seed-word').forEach(input => {
+                input.addEventListener('input', checkComplete);
+                input.addEventListener('keydown', autoFocusNext);
+            });
+
+            document.getElementById('password').addEventListener('input', checkComplete);
+
+            document.getElementById('importBtn').onclick = async () => {
+                const mnemonic = getMnemonic();
+                const password = existingPassword;
+                
+                try {
+                    await invoke('import_wallet', { mnemonic, password });
+                    showDashboard(invoke, password);
+                } catch(e) {
+                    alert('Import error: ' + e);
+                }
+            };
+
+            document.getElementById('cancelBtn').onclick = () => showWelcomeScreen(invoke);
+        }
+
+        // Returns true if the error string indicates session expiry.
+        function isSessionExpired(err) {
+            return String(err).toLowerCase().includes('session expired');
+        }
+
+        // Called whenever a command returns a session-expired error.
+        function handleSessionExpired(invoke) {
+            showWelcomeScreen(invoke, true);
+        }
+
+        function getSidebar(activePage) {
+            const navItems = [
+                { id: 'nav-home', label: 'Home', icon: '<path d="M2 8.5L8 3l6 5.5V15h-4v-4H6v4H2V8.5z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" fill="none"/>' },
+                { id: 'nav-send', label: 'Send', icon: '<path d="M8 13V3M8 3l-4 4M8 3l4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>' },
+                { id: 'nav-receive', label: 'Receive', icon: '<path d="M8 3v10M8 13l-4-4M8 13l4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>' },
+                { id: 'nav-history', label: 'History', icon: '<circle cx="8" cy="8" r="5" stroke="currentColor" stroke-width="1.4" fill="none"/><path d="M8 5.5V8l2 2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>' }
+            ];
+
+            return /*html*/`
+                <div class="flex flex-col bg-[#0d0d14] border-r border-[#1a1a2e] w-48 py-5 px-3 flex-shrink-0">
+                    <div class="flex items-center gap-2 px-2 mb-8">
+                        <div class="flex items-center gap-2 px-2 mb-8">
+                            <img
+                                src="/assets/logo.svg"
+                                width="28"
+                                height="28"
+                                alt="Logo"
+                                class="w-7 h-7"
+                            >
+                            <span class="text-white font-bold text-base tracking-wide">RuDi</span>
+                        </div>
+                    </div>
+
+                    <nav class="flex flex-col gap-1 flex-1">
+                        ${navItems.map(nav => `
+                            <button id="${nav.id}" class="nav-btn flex items-center gap-3 px-3 py-2.5 rounded-xl cursor-pointer transition-all text-left w-full ${activePage === nav.id ? 'bg-[#1a1a2e] text-white' : 'text-[#6b6b8a] hover:text-white hover:bg-[#141422]'}">
+                                <svg width="18" height="18" viewBox="0 0 16 16" fill="none">${nav.icon}</svg>
+                                <span class="text-sm font-medium">${nav.label}</span>
+                            </button>
+                        `).join('')}
+                    </nav>
+
+                    <button id="nav-lock" class="flex items-center gap-3 px-3 py-2.5 rounded-xl cursor-pointer transition-all text-left w-full text-[#6b6b8a] hover:text-red-400 hover:bg-[#141422] mt-2">
+                        <svg width="18" height="18" viewBox="0 0 16 16" fill="none">
+                            <rect x="3" y="7" width="10" height="8" rx="1.5" stroke="currentColor" stroke-width="1.4" fill="none"/>
+                            <path d="M5 7V5a3 3 0 0 1 6 0v2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+                        </svg>
+                        <span class="text-sm font-medium">Lock</span>
+                    </button>
+                </div>
+            `;
+        }
+
+        function getHeader() {
+            return /*html*/`
+                <div class="flex items-center justify-end pb-3 border-b border-[#1a1a2e]">
+                </div>
+            `;
+        }
+
+        function setupNavigation(invoke, password, currentScreen) {
+            const navButtons = ['nav-home', 'nav-send', 'nav-receive', 'nav-history'];
+
+            navButtons.forEach(btnId => {
+                const btn = document.getElementById(btnId);
+                if (btn) {
+                    btn.onclick = () => {
+                        if (btnId === 'nav-home') showDashboard(invoke, password);
+                        else if (btnId === 'nav-send') showSendScreen(invoke, password);
+                        else if (btnId === 'nav-receive') showReceiveScreen(invoke, password);
+                        else if (btnId === 'nav-history') showHistoryScreen(invoke, password);
+                    };
+                }
+            });
+
+            const lockBtn = document.getElementById('nav-lock');
+            if (lockBtn) {
+                lockBtn.onclick = async () => {
+                    try { await invoke('lock_wallet'); } catch(_) {}
+                    showWelcomeScreen(invoke);
+                };
+            }
+        }
+
+        function showDashboard(invoke, password) {
+            document.getElementById('app').innerHTML = /*html*/`
+
+                    <div class="flex bg-[#0d0d14] min-h-screen">
+                        ${getSidebar('nav-home')}
+                        
+                        <div class="flex-1 overflow-y-auto px-5 py-5 space-y-5" style="scrollbar-width:thin;">
+                            ${getHeader()}
+
+
+                    <div class="flex-1 overflow-y-auto px-4 py-5 space-y-4" style="scrollbar-width:thin; scrollbar-color:#2a2a45 transparent;">
+
+
+                        <div class="rounded-2xl bg-gradient-to-br from-[#1a1a2e] to-[#12121f] border border-[#2a2a45] p-5">
+                            <p class="text-[#6b6b8a] text-xs font-medium mb-1">Balance</p>
+                            <h2 id="totalBalance" class="text-white text-3xl font-bold mb-1">$0.00</h2>
+                            <p class="text-[#6b6b8a] text-xs mb-4">+ 0,00 USD (+0,00%)</p>
+                            <div class="flex gap-3">
+                                <button id="sendBtn" class="flex-1 py-2.5 rounded-full text-white text-sm font-semibold bg-gradient-to-r from-sky-400 to-purple-600 hover:opacity-80 transition-opacity cursor-pointer">
+                                    Send
+                                </button>
+                                <button id="receiveBtn" class="flex-1 py-2.5 rounded-full text-white text-sm font-semibold bg-gradient-to-r from-purple-600 to-sky-400 hover:opacity-80 transition-opacity cursor-pointer">
+                                    Receive
+                                </button>
+                            </div>
+                        </div>
+
+                        <div>
+                            <h3 class="text-white font-semibold text-sm mb-3 px-1">My Portfolio</h3>
+                            <div class="grid grid-cols-3 gap-2">
+
+                                <div class="rounded-2xl bg-[#1a1a2e] border border-[#2a2a45] p-3 flex flex-col gap-1">
+                                    <p class="text-[#6b6b8a] text-xs font-medium">Bitcoin</p>
+                                    <p id="btcBalance" class="text-white text-sm font-bold">—</p>
+                                    <p id="btcUsd" class="text-sky-400 text-xs">$0.00</p>
+                                    <p class="text-[#6b6b8a] text-xs">+ 0,00%</p>
+                                    <p id="btcAddr" class="text-[#6b6b8a] text-[10px] truncate mt-1">loading...</p>
+                                </div>
+
+                                <div class="rounded-2xl bg-[#1a1a2e] border border-[#2a2a45] p-3 flex flex-col gap-1">
+                                    <p class="text-[#6b6b8a] text-xs font-medium">Ethereum</p>
+                                    <p id="ethBalance" class="text-white text-sm font-bold">—</p>
+                                    <p id="ethUsd" class="text-sky-400 text-xs">$0.00</p>
+                                    <p class="text-[#6b6b8a] text-xs">+ 0,00%</p>
+                                    <p id="ethAddr" class="text-[#6b6b8a] text-[10px] truncate mt-1">loading...</p>
+                                </div>
+
+                                <div class="rounded-2xl bg-[#1a1a2e] border border-[#2a2a45] p-3 flex flex-col gap-1">
+                                    <p class="text-[#6b6b8a] text-xs font-medium">Solana</p>
+                                    <p id="solBalance" class="text-white text-sm font-bold">—</p>
+                                    <p id="solUsd" class="text-sky-400 text-xs">$0.00</p>
+                                    <p class="text-[#6b6b8a] text-xs">+ 0,00%</p>
+                                    <p id="solAddr" class="text-[#6b6b8a] text-[10px] truncate mt-1">loading...</p>
+                                </div>
+
+                            </div>
+                        </div>
+
+                        <div>
+                            <div class="flex items-center justify-between mb-3 px-1">
+                                <h3 class="text-white font-semibold text-sm">Last Transactions</h3>
+                                <button id="seeAllTxBtn" class="text-sky-400 text-xs hover:text-sky-300 transition-colors cursor-pointer">See all</button>
+                            </div>
+                            <div id="recentTxList" class="space-y-2">
+                                <div class="flex items-center justify-center py-6 gap-2">
+                                    <div class="w-4 h-4 rounded-full border-2 border-[#2a2a45] border-t-sky-400 animate-spin"></div>
+                                    <p class="text-[#6b6b8a] text-xs">Loading...</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="h-2"></div>
+                    </div>
+
+                </div>
+            `;
+
+            setupNavigation(invoke, password, 'dashboard');
+            sendBtn();
+            receiveBtn();
+
+
+            const prices   = { btc: 0, eth: 0, sol: 0 };
+            const balances = { btc: 0, eth: 0, sol: 0 };
+
+            async function fetchPrices() {
+                try {
+                    const r = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum,solana&vs_currencies=usd');
+                    const data = await r.json();
+                    prices.btc = data.bitcoin?.usd  || 0;
+                    prices.eth = data.ethereum?.usd || 0;
+                    prices.sol = data.solana?.usd   || 0;
+                } catch(_) {}
+            }
+
+            function formatAddr(addr) {
+                if (!addr || addr.length < 12) return addr;
+                return addr.slice(0, 6) + '...' + addr.slice(-4);
+            }
+            
+
+            function updateTotalBalance() {
+                const total = balances.btc * prices.btc + balances.eth * prices.eth + balances.sol * prices.sol;
+                const el = document.getElementById('totalBalance');
+                if (el) el.textContent = '$' + total.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+            }
+
+            function sendBtn() {
+                const btn = document.getElementById('sendBtn');
+                if (btn) {
+                    btn.onclick = () => showSendScreen(invoke, password);
+                }
+            }
+
+            function receiveBtn() {
+                const btn = document.getElementById('receiveBtn');
+                if (btn) {
+                    btn.onclick = () => showReceiveScreen(invoke, password);
+                }
+            }
+
+
+            async function loadNetwork(network, ticker, balanceElId, usdElId, addrElId) {
+                try {
+                    const balanceCall = network === 'eth'
+                        ? invoke('get_eth_balance')
+                        : invoke('get_balance', { network });
+
+                    const [addr, bal] = await Promise.all([
+                        invoke('get_address', { network }),
+                        balanceCall.catch(() => 0),
+                    ]);
+
+                    balances[network] = bal || 0;
+                    const usd = balances[network] * (prices[network] || 0);
+
+                    const balEl  = document.getElementById(balanceElId);
+                    const usdEl  = document.getElementById(usdElId);
+                    const addrEl = document.getElementById(addrElId);
+
+                    if (balEl)  balEl.textContent  = balances[network].toFixed(4) + ' ' + ticker.toUpperCase();
+                    if (usdEl)  usdEl.textContent  = '$' + usd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                    if (addrEl) addrEl.textContent = formatAddr(addr);
+                    updateTotalBalance();
+                } catch(e) {
+                    if (isSessionExpired(e)) { handleSessionExpired(invoke); return; }
+                    const balEl = document.getElementById(balanceElId);
+                    if (balEl) balEl.textContent = 'Error';
+                }
+            }
+
+            (async () => {
+                await fetchPrices();
+                await Promise.all([
+                    loadNetwork('btc', 'btc', 'btcBalance', 'btcUsd', 'btcAddr'),
+                    loadNetwork('eth', 'eth', 'ethBalance', 'ethUsd', 'ethAddr'),
+                    loadNetwork('sol', 'sol', 'solBalance', 'solUsd', 'solAddr'),
+                ]);
+            })();
+            document.getElementById('seeAllTxBtn').onclick = () => showHistoryScreen(invoke, password);
+
+            function formatTimestamp(ts) {
+                if (!ts) return '—';
+                const n = parseInt(ts);
+                const date = isNaN(n) ? new Date(ts) : new Date(n * 1000);
+                if (isNaN(date.getTime())) return ts;
+                const now = new Date();
+                const diff = now - date;
+                if (diff < 86400000) return 'Today';
+                if (diff < 172800000) return 'Yesterday';
+                return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+            }
+
+            function shortAddr(addr) {
+                if (!addr || addr.length < 12) return addr;
+                return addr.slice(0, 6) + '...' + addr.slice(-4);
+            }
+
+            async function loadRecentTxs() {
+                try {
+                    const [btcTxs, ethTxs, solTxs] = await Promise.allSettled([
+                        invoke('get_transaction_history', { network: 'btc', sinceTxid: null }),
+                        invoke('get_transaction_history', { network: 'eth', sinceTxid: null }),
+                        invoke('get_transaction_history', { network: 'sol', sinceTxid: null }),
+                    ]);
+
+                    const all = [
+                        ...(btcTxs.status === 'fulfilled' ? btcTxs.value : []),
+                        ...(ethTxs.status === 'fulfilled' ? ethTxs.value : []),
+                        ...(solTxs.status === 'fulfilled' ? solTxs.value : []),
+                    ].sort((a, b) => (parseInt(b.timestamp) || 0) - (parseInt(a.timestamp) || 0))
+                    .slice(0, 5);
+
+                    const list = document.getElementById('recentTxList');
+                    if (!list) return;
+
+                    if (all.length === 0) {
+                        list.innerHTML = `<p class="text-[#3a3a55] text-xs text-center py-6">No transactions yet</p>`;
+                        return;
+                    }
+
+                    const networkTicker = { Btc: 'BTC', Eth: 'ETH', Sol: 'SOL' };
+
+                    list.innerHTML = all.map(tx => {
+                        const isSent      = tx.direction === 'Sent';
+                        const ticker      = networkTicker[tx.network] || tx.network;
+                        const amountColor = isSent ? 'text-purple-400' : 'text-sky-400';
+                        const sign        = isSent ? '-' : '+';
+                        const counterparty = isSent ? tx.address_to : tx.address_from;
+                        const arrowPath   = isSent
+                            ? '<path d="M8 3v10M8 3l-4 4M8 3l4 4" stroke="#a78bfa" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>'
+                            : '<path d="M8 13V3M8 13l-4-4M8 13l4-4" stroke="#38bdf8" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>';
+
+                        return `
+                            <div class="flex items-center justify-between bg-[#1a1a2e] border border-[#2a2a45] rounded-2xl px-4 py-3">
+                                <div class="flex items-center gap-3">
+                                    <div class="w-8 h-8 rounded-full bg-[#2a2a45] flex items-center justify-center flex-shrink-0">
+                                        <svg width="14" height="14" viewBox="0 0 16 16" fill="none">${arrowPath}</svg>
+                                    </div>
+                                    <div>
+                                        <p class="text-white text-sm font-medium">
+                                            ${isSent ? 'Sent' : 'Received'}
+                                            <span class="${amountColor}">${sign}${tx.amount.toFixed(5)} ${ticker}</span>
+                                        </p>
+                                        <p class="text-[#6b6b8a] text-xs">${isSent ? 'to' : 'from'} ${shortAddr(counterparty)}</p>
+                                    </div>
+                                </div>
+                                <span class="text-[#6b6b8a] text-xs whitespace-nowrap ml-2">${formatTimestamp(tx.timestamp)}</span>
+                            </div>
+                        `;
+                    }).join('');
+
+                } catch(e) {
+                    if (isSessionExpired(e)) { handleSessionExpired(invoke); return; }
+                    const list = document.getElementById('recentTxList');
+                    if (list) list.innerHTML = `<p class="text-red-400 text-xs px-1">Failed to load transactions</p>`;
+                }
+            }
+
+            loadRecentTxs();
+        }
+
+        function showSendScreen(invoke, password) {
+            document.getElementById('app').innerHTML = /*html*/`
+                <div class="flex bg-[#0d0d14] min-h-screen">
+                    ${getSidebar('nav-send')}
+                    
+                    <div class="flex-1 overflow-y-auto px-5 py-5 space-y-5" style="scrollbar-width:thin;">
+                        ${getHeader()}
+                        
+                        <h2 class="text-white font-bold text-xl">Send</h2>
+
+                        <div>
+                            <p class="text-[#6b6b8a] text-xs font-medium mb-2">Network</p>
+                            <div class="grid grid-cols-3 gap-2">
+                                ${[
+                                    { id: 'net-btc', network: 'btc', label: 'Bitcoin', ticker: 'BTC',
+                                    icon: '<circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.3" fill="none"/><text x="8" y="12" text-anchor="middle" font-size="8" fill="currentColor" font-weight="bold">₿</text>' },
+                                    { id: 'net-eth', network: 'eth', label: 'Ethereum', ticker: 'ETH',
+                                    icon: '<path d="M8 2L3 8.5l5 3 5-3L8 2zM3 8.5L8 14l5-5.5" stroke="currentColor" stroke-width="1.3" fill="none" stroke-linejoin="round"/>' },
+                                    { id: 'net-sol', network: 'sol', label: 'Solana', ticker: 'SOL',
+                                    icon: '<path d="M3 5h10M3 8h10M3 11h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>' },
+                                ].map(n => `
+                                    <button id="${n.id}" data-network="${n.network}"
+                                        class="network-btn flex flex-col items-center gap-1.5 py-3 rounded-2xl border transition-all cursor-pointer
+                                            bg-[#1a1a2e] border-[#2a2a45] text-[#6b6b8a] hover:text-white hover:border-sky-500">
+                                        <svg width="20" height="20" viewBox="0 0 16 16" fill="none">${n.icon}</svg>
+                                        <span class="text-xs font-semibold">${n.ticker}</span>
+                                        <span class="text-[10px]">${n.label}</span>
+                                    </button>
+                                `).join('')}
+                            </div>
+                        </div>
+
+                        <div class="rounded-2xl bg-[#1a1a2e] border border-[#2a2a45] px-4 py-3 flex items-center justify-between">
+                            <span class="text-[#6b6b8a] text-xs">Available balance</span>
+                            <span id="availableBalance" class="text-white text-sm font-semibold">— —</span>
+                        </div>
+
+                        <div>
+                            <p class="text-[#6b6b8a] text-xs font-medium mb-2">Recipient address</p>
+                            <div class="relative">
+                                <input type="text" id="recipientInput" placeholder="Enter address..."
+                                    class="w-full bg-[#1a1a2e] border border-[#2a2a45] rounded-2xl py-3.5 px-4 pr-12 text-[#c8c8e8] text-sm outline-none focus:ring-2 focus:ring-purple-500 transition-all placeholder-[#3a3a55]"/>
+                                <button id="pasteBtn" class="absolute right-3 top-1/2 -translate-y-1/2 text-[#6b6b8a] hover:text-sky-400 transition-colors cursor-pointer">
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+                                        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                                    </svg>
+                                </button>
+                            </div>
+                        </div>
+
+                        <div>
+                            <p class="text-[#6b6b8a] text-xs font-medium mb-2">Amount</p>
+                            <div class="relative">
+                                <input type="number" id="amountInput" placeholder="0.00" min="0" step="any"
+                                    class="w-full bg-[#1a1a2e] border border-[#2a2a45] rounded-2xl py-3.5 px-4 pr-20 text-[#c8c8e8] text-sm outline-none focus:ring-2 focus:ring-purple-500 transition-all placeholder-[#3a3a55]"/>
+                                <div class="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-2">
+                                    <span id="tickerLabel" class="text-[#6b6b8a] text-xs font-semibold">BTC</span>
+                                </div>
+                            </div>
+                            <p id="usdEstimate" class="text-[#6b6b8a] text-xs mt-1.5">≈ $0.00 USD</p>
+                        </div>
+
+                        <div class="rounded-2xl bg-[#1a1a2e] border border-[#2a2a45] px-4 py-3 flex items-center justify-between">
+                            <span class="text-[#6b6b8a] text-xs">Network fee</span>
+                            <span class="text-[#6b6b8a] text-xs">estimated on send</span>
+                        </div>
+
+                        <button id="sendBtn" class="w-full py-3.5 rounded-full text-white text-sm font-semibold bg-gradient-to-r from-sky-400 to-purple-600 hover:opacity-80 transition-opacity cursor-pointer opacity-50" disabled>
+                            Send
+                        </button>
+
+                        <div id="statusMsg" class="hidden rounded-2xl px-4 py-3 text-sm text-center"></div>
+                        <div class="h-4"></div>
+                    </div>
+                </div>
+            `;
+
+            let selectedNetwork = null;
+            let networkBalances = { btc: 0, eth: 0, sol: 0 };
+            let prices = { btc: 0, eth: 0, sol: 0 };
+            const tickers = { btc: 'BTC', eth: 'ETH', sol: 'SOL' };
+
+            async function loadAllBalances() {
+                try {
+                    const r = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum,solana&vs_currencies=usd');
+                    const d = await r.json();
+                    prices.btc = d.bitcoin?.usd || 0;
+                    prices.eth = d.ethereum?.usd || 0;
+                    prices.sol = d.solana?.usd || 0;
+                } catch(_) {}
+
+                const btcPromise = invoke('get_balance', { network: 'btc' }).catch(() => 0);
+                const ethPromise = invoke('get_eth_balance').catch(() => 0);
+                const solPromise = invoke('get_balance', { network: 'sol' }).catch(() => 0);
+
+                const [btcBal, ethBal, solBal] = await Promise.all([btcPromise, ethPromise, solPromise]);
+                networkBalances.btc = btcBal || 0;
+                networkBalances.eth = ethBal || 0;
+                networkBalances.sol = solBal || 0;
+            }
+
+            function updateSelectedNetworkDisplay() {
+                if (!selectedNetwork) return;
+                
+                const balance = networkBalances[selectedNetwork] || 0;
+                const ticker = tickers[selectedNetwork];
+                document.getElementById('availableBalance').textContent = `${balance.toFixed(6)} ${ticker}`;
+                document.getElementById('tickerLabel').textContent = ticker;
+                updateUsdEstimate();
+                updateSendBtn();
+            }
+
+            function updateUsdEstimate() {
+                if (!selectedNetwork) return;
+                const amount = parseFloat(document.getElementById('amountInput').value) || 0;
+                const price = prices[selectedNetwork] || 0;
+                const usd = (amount * price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                document.getElementById('usdEstimate').textContent = `≈ $${usd} USD`;
+            }
+
+            function updateSendBtn() {
+                const recipient = document.getElementById('recipientInput').value.trim();
+                const amount = parseFloat(document.getElementById('amountInput').value) || 0;
+                const btn = document.getElementById('sendBtn');
+                const hasBalance = selectedNetwork && amount > 0 && amount <= (networkBalances[selectedNetwork] || 0);
+                const isValid = selectedNetwork && recipient.length > 10 && amount > 0 && hasBalance;
+
+                btn.disabled = !isValid;
+                btn.classList.toggle('opacity-50', !isValid);
+                btn.classList.toggle('cursor-not-allowed', !isValid);
+                btn.classList.toggle('cursor-pointer', isValid);
+            }
+
+            function showStatus(msg, isError = false) {
+                const el = document.getElementById('statusMsg');
+                if (!el) return;
+                el.textContent = msg;
+                el.classList.remove('hidden');
+                el.className = `rounded-2xl px-4 py-3 text-sm text-center ${
+                    isError ? 'bg-red-900/30 border border-red-500/30 text-red-400' : 'bg-green-900/30 border border-green-500/30 text-green-400'
+                }`;
+                setTimeout(() => el.classList.add('hidden'), 5000);
+            }
+
+            document.querySelectorAll('.network-btn').forEach(btn => {
+                btn.addEventListener('click', async () => {
+                    const network = btn.dataset.network;
+                    selectedNetwork = network;
+
+                    document.querySelectorAll('.network-btn').forEach(b => {
+                        b.classList.remove('border-sky-500', 'text-white', 'bg-[#22223a]');
+                        b.classList.add('border-[#2a2a45]', 'text-[#6b6b8a]');
+                    });
+                    btn.classList.remove('border-[#2a2a45]', 'text-[#6b6b8a]');
+                    btn.classList.add('border-sky-500', 'text-white', 'bg-[#22223a]');
+
+                    updateSelectedNetworkDisplay();
+                });
+            });
+
+            document.getElementById('amountInput').addEventListener('input', () => {
+                updateUsdEstimate();
+                updateSendBtn();
+            });
+            document.getElementById('recipientInput').addEventListener('input', updateSendBtn);
+
+            document.getElementById('pasteBtn').onclick = async () => {
+                try {
+                    const text = await navigator.clipboard.readText();
+                    document.getElementById('recipientInput').value = text.trim();
+                    updateSendBtn();
+                } catch(_) {}
+            };
+
+            document.getElementById('sendBtn').onclick = async () => {
+                if (!selectedNetwork) return;
+                
+                const recipient = document.getElementById('recipientInput').value.trim();
+                const amount = parseFloat(document.getElementById('amountInput').value);
+                const btn = document.getElementById('sendBtn');
+
+                btn.disabled = true;
+                btn.textContent = 'Sending...';
+                btn.classList.add('opacity-50');
+
+                try {
+                    const txid = await invoke('send_transaction', {
+                        network: selectedNetwork,
+                        recipient,
+                        amount,
+                    });
+
+                    showStatus(`✓ Sent! TX: ${txid.slice(0, 12)}...${txid.slice(-6)}`);
+                    document.getElementById('amountInput').value = '';
+                    document.getElementById('recipientInput').value = '';
+
+                    const balCmd = selectedNetwork === 'eth' ? 'get_eth_balance' : 'get_balance';
+                    const balArgs = selectedNetwork === 'eth' ? {} : { network: selectedNetwork };
+                    const newBal = await invoke(balCmd, balArgs).catch(() => networkBalances[selectedNetwork]);
+                    networkBalances[selectedNetwork] = newBal || 0;
+                    
+                    if (selectedNetwork) {
+                        document.getElementById('availableBalance').textContent = `${(newBal || 0).toFixed(6)} ${tickers[selectedNetwork]}`;
+                    }
+                    updateSendBtn();
+                } catch(e) {
+                    if (isSessionExpired(e)) { handleSessionExpired(invoke); return; }
+                    showStatus('Error: ' + e, true);
+                } finally {
+                    btn.textContent = 'Send';
+                    updateSendBtn();
+                }
+            };
+
+            (async () => {
+                await loadAllBalances();
+                const defaultBtn = document.getElementById('net-btc');
+                if (defaultBtn) {
+                    defaultBtn.click();
+                }
+            })();
+
+            setupNavigation(invoke, password, 'send');
+        }
+
+    function showReceiveScreen(invoke, password) {
+        document.getElementById('app').innerHTML = /*html*/`
+            <div class="flex bg-[#0d0d14] min-h-screen">
+                ${getSidebar('nav-receive')}
+                
+                <div class="flex-1 overflow-y-auto px-5 py-5 space-y-5" style="scrollbar-width:thin;">
+                    ${getHeader()}
+                    
+                    <h2 class="text-white font-bold text-xl">Receive</h2>
+
+                    <div>
+                        <p class="text-[#6b6b8a] text-xs font-medium mb-2">Select network</p>
+                        <div class="grid grid-cols-3 gap-2">
+                            ${[
+                                { id: 'net-btc', network: 'btc', label: 'Bitcoin',  ticker: 'BTC',
+                                icon: '<circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.3" fill="none"/><text x="8" y="12" text-anchor="middle" font-size="8" fill="currentColor" font-weight="bold">₿</text>' },
+                                { id: 'net-eth', network: 'eth', label: 'Ethereum', ticker: 'ETH',
+                                icon: '<path d="M8 2L3 8.5l5 3 5-3L8 2zM3 8.5L8 14l5-5.5" stroke="currentColor" stroke-width="1.3" fill="none" stroke-linejoin="round"/>' },
+                                { id: 'net-sol', network: 'sol', label: 'Solana',   ticker: 'SOL',
+                                icon: '<path d="M3 5h10M3 8h10M3 11h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>' },
+                            ].map(n => `
+                                <button id="${n.id}" data-network="${n.network}"
+                                    class="network-btn flex flex-col items-center gap-1.5 py-3 rounded-2xl border transition-all cursor-pointer
+                                        bg-[#1a1a2e] border-[#2a2a45] text-[#6b6b8a] hover:text-white hover:border-sky-500">
+                                    <svg width="20" height="20" viewBox="0 0 16 16" fill="none">${n.icon}</svg>
+                                    <span class="text-xs font-semibold">${n.ticker}</span>
+                                    <span class="text-[10px]">${n.label}</span>
+                                </button>
+                            `).join('')}
+                        </div>
+                    </div>
+
+                    <div id="addressCard" class="hidden rounded-2xl bg-[#1a1a2e] border border-[#2a2a45] p-5 flex flex-col items-center gap-4">
+                        <div id="qrContainer" class="w-44 h-44 bg-white rounded-2xl flex items-center justify-center p-2">
+                            <div id="qrPlaceholder" class="text-[#6b6b8a] text-xs">Generating...</div>
+                        </div>
+                        <div id="networkBadge" class="flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#2a2a45] text-[#c8c8e8] text-xs font-semibold">—</div>
+                        <div class="w-full">
+                            <p class="text-[#6b6b8a] text-xs font-medium mb-2 text-center">Your address</p>
+                            <div class="flex items-center gap-2 bg-[#12121f] border border-[#2a2a45] rounded-2xl px-4 py-3">
+                                <p id="addressText" class="text-[#c8c8e8] text-xs font-mono flex-1 break-all leading-relaxed">—</p>
+                                <button id="copyBtn" class="flex-shrink-0 text-[#6b6b8a] hover:text-sky-400 transition-colors cursor-pointer ml-1" title="Copy address">
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+                                        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                                    </svg>
+                                </button>
+                            </div>
+                        </div>
+                        <div id="copyFeedback" class="hidden w-full rounded-xl px-4 py-2.5 text-center text-xs font-medium bg-green-900/30 border border-green-500/30 text-green-400">
+                            Address copied to clipboard!
+                        </div>
+                        <div class="w-full rounded-xl bg-[#1e1a10] border border-yellow-600/30 px-4 py-3 flex gap-2">
+                            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" class="flex-shrink-0 mt-0.5">
+                                <path d="M8 2L1.5 13h13L8 2z" stroke="#ca8a04" stroke-width="1.3" stroke-linejoin="round" fill="none"/>
+                                <path d="M8 6v3M8 11v.5" stroke="#ca8a04" stroke-width="1.5" stroke-linecap="round"/>
+                            </svg>
+                            <p id="warningText" class="text-yellow-600 text-[10px] leading-relaxed">Select a network to see address</p>
+                        </div>
+                    </div>
+
+                    <div id="selectPrompt" class="rounded-2xl bg-[#1a1a2e] border border-[#2a2a45] px-4 py-10 flex flex-col items-center gap-3">
+                        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#3a3a55" stroke-width="1.5">
+                            <path d="M8 3v10M8 13l-4-4M8 13l4-4"/>
+                            <path d="M16 21V11M16 11l-4 4M16 11l4 4"/>
+                        </svg>
+                        <p class="text-[#3a3a55] text-sm">Select a network above</p>
+                    </div>
+
+                    <div class="h-4"></div>
+                </div>
+            </div>
+        `;
+
+        function loadQRLib() {
+            return new Promise((resolve) => {
+                if (window.QRCode) { resolve(); return; }
+                const s = document.createElement('script');
+                s.src = 'https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js';
+                s.onload = resolve;
+                document.head.appendChild(s);
+            });
+        }
+
+        async function renderQR(address) {
+            await loadQRLib();
+            const container = document.getElementById('qrContainer');
+            if (!container) return;
+            container.innerHTML = '';
+            try {
+                new window.QRCode(container, {
+                    text: address,
+                    width: 160,
+                    height: 160,
+                    colorDark: '#000000',
+                    colorLight: '#ffffff',
+                    correctLevel: window.QRCode.CorrectLevel.M,
+                });
+            } catch(_) {
+                container.innerHTML = '<p class="text-red-400 text-xs text-center p-2">QR failed</p>';
+            }
+        }
+
+        const networkTickers = { btc: 'BTC', eth: 'ETH', sol: 'SOL' };
+
+        document.querySelectorAll('.network-btn').forEach(btn => {
+            btn.addEventListener('click', async () => {
+                const network = btn.dataset.network;
+
+                document.querySelectorAll('.network-btn').forEach(b => {
+                    b.classList.remove('border-sky-500', 'text-white', 'bg-[#22223a]');
+                    b.classList.add('border-[#2a2a45]', 'text-[#6b6b8a]');
+                });
+                btn.classList.remove('border-[#2a2a45]', 'text-[#6b6b8a]');
+                btn.classList.add('border-sky-500', 'text-white', 'bg-[#22223a]');
+
+                document.getElementById('addressCard').classList.remove('hidden');
+                document.getElementById('selectPrompt').classList.add('hidden');
+
+                document.getElementById('addressText').textContent = 'Loading...';
+                document.getElementById('networkBadge').textContent = networkTickers[network];
+                document.getElementById('qrContainer').innerHTML = '<div class="text-[#6b6b8a] text-xs">Generating...</div>';
+                document.getElementById('warningText').textContent = `Only send ${networkTickers[network]} to this address. Sending other assets may result in permanent loss.`;
+                document.getElementById('copyFeedback').classList.add('hidden');
+
+                try {
+                    const address = await invoke('get_address', { network });
+                    document.getElementById('addressText').textContent = address;
+                    renderQR(address);
+
+                    document.getElementById('copyBtn').onclick = () => {
+                        navigator.clipboard.writeText(address).then(() => {
+                            const fb = document.getElementById('copyFeedback');
+                            fb.classList.remove('hidden');
+                            setTimeout(() => fb.classList.add('hidden'), 2500);
+                        });
+                    };
+                } catch(e) {
+                    if (isSessionExpired(e)) { handleSessionExpired(invoke); return; }
+                    document.getElementById('addressText').textContent = 'Error: ' + e;
+                    document.getElementById('qrContainer').innerHTML = '<p class="text-red-400 text-xs text-center p-2">Failed to load address</p>';
+                }
+            });
+        });
+
+        setupNavigation(invoke, password, 'receive');
+    }
+
+    function showHistoryScreen(invoke, password) {
+        document.getElementById('app').innerHTML = /*html*/`
+            <div class="flex bg-[#0d0d14] min-h-screen">
+                ${getSidebar('nav-history')}
+                
+                <div class="flex-1 overflow-y-auto px-5 py-5 space-y-5" style="scrollbar-width:thin;">
+                    ${getHeader()}
+                    
+                    <h2 class="text-white font-bold text-xl">Transaction History</h2>
+
+                    <div class="flex gap-2 items-center">
+                        ${[
+                            { id: 'tab-all', network: 'all', label: 'All' },
+                            { id: 'tab-btc', network: 'btc', label: 'BTC' },
+                            { id: 'tab-eth', network: 'eth', label: 'ETH' },
+                            { id: 'tab-sol', network: 'sol', label: 'SOL' },
+                        ].map((t, i) => `
+                            <button id="${t.id}" data-network="${t.network}"
+                                class="tab-btn px-4 py-1.5 rounded-full text-xs font-semibold cursor-pointer transition-all border
+                                    ${i === 0 ? 'bg-gradient-to-r from-sky-400 to-purple-600 text-white border-transparent' : 'bg-[#1a1a2e] text-[#6b6b8a] border-[#2a2a45] hover:text-white hover:border-sky-500'}">
+                                ${t.label}
+                            </button>
+                        `).join('')}
+                        <button id="refreshBtn" class="ml-auto text-[#6b6b8a] hover:text-sky-400 transition-colors cursor-pointer p-1.5 rounded-xl hover:bg-[#1a1a2e]">
+                            <svg id="refreshIcon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M23 4v6h-6M1 20v-6h6"/>
+                                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+                            </svg>
+                        </button>
+                    </div>
+
+                    <div id="txList" class="space-y-2">
+                        <div class="flex flex-col items-center gap-3 py-10">
+                            <div class="w-6 h-6 rounded-full border-2 border-[#2a2a45] border-t-sky-400 animate-spin"></div>
+                            <p class="text-[#6b6b8a] text-xs">Loading transactions...</p>
+                        </div>
+                    </div>
+
+                    <div class="h-4"></div>
+                </div>
+            </div>
+        `;
+
+        if (!document.querySelector('#refreshStyle')) {
+            const style = document.createElement('style');
+            style.id = 'refreshStyle';
+            style.textContent = `@keyframes spin { 100% { transform: rotate(360deg); } }`;
+            document.head.appendChild(style);
+        }
+
+        let allTxs = [];
+        let activeFilter = 'all';
+        let loading = false;
+
+        function formatTimestamp(ts) {
+            if (!ts) return '—';
+            const n = parseInt(ts);
+            const date = isNaN(n) ? new Date(ts) : new Date(n * 1000);
+            if (isNaN(date.getTime())) return ts;
+            const now = new Date();
+            const diff = now - date;
+            if (diff < 86400000) return 'Today';
+            if (diff < 172800000) return 'Yesterday';
+            return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+        }
+
+        function shortAddr(addr) {
+            if (!addr || addr.length < 12) return addr;
+            return addr.slice(0, 6) + '...' + addr.slice(-4);
+        }
+
+        function networkColor(network) {
+            switch(network?.toLowerCase()) {
+                case 'btc': return 'text-amber-400';
+                case 'eth': return 'text-sky-400';
+                case 'sol': return 'text-purple-400';
+                default: return 'text-[#6b6b8a]';
+            }
+        }
+
+        function networkLabel(network) {
+            switch(network?.toLowerCase()) {
+                case 'btc': return 'BTC';
+                case 'eth': return 'ETH';
+                case 'sol': return 'SOL';
+                default: return network || '—';
+            }
+        }
+
+        function statusBadge(status) {
+            switch(status?.toLowerCase()) {
+                case 'success': return '<span class="text-[10px] font-semibold text-green-400 bg-green-900/30 border border-green-500/20 px-2 py-0.5 rounded-full">Confirmed</span>';
+                case 'pending': return '<span class="text-[10px] font-semibold text-yellow-400 bg-yellow-900/30 border border-yellow-500/20 px-2 py-0.5 rounded-full">Pending</span>';
+                case 'failed': return '<span class="text-[10px] font-semibold text-red-400 bg-red-900/30 border border-red-500/20 px-2 py-0.5 rounded-full">Failed</span>';
+                default: return '';
+            }
+        }
+
+        function renderTxs(txs) {
+            const list = document.getElementById('txList');
+            if (!list) return;
+
+            const filtered = activeFilter === 'all'
+                ? txs
+                : txs.filter(tx => tx.network?.toLowerCase() === activeFilter);
+
+            if (filtered.length === 0) {
+                list.innerHTML = `
+                    <div class="flex flex-col items-center gap-3 py-10">
+                        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#3a3a55" stroke-width="1.5">
+                            <circle cx="12" cy="12" r="10"/>
+                            <path d="M8 15s1.5-2 4-2 4 2 4 2M9 9h.01M15 9h.01"/>
+                        </svg>
+                        <p class="text-[#3a3a55] text-sm">No transactions found</p>
+                    </div>
+                `;
+                return;
+            }
+
+            list.innerHTML = filtered.map(tx => {
+                const isSent = tx.direction === 'Sent';
+                const sign = isSent ? '-' : '+';
+                const amountColor = isSent ? 'text-red-400' : 'text-green-400';
+                const arrowIcon = isSent
+                    ? '<path d="M8 3v10M8 3l-4 4M8 3l4 4" stroke="#f87171" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>'
+                    : '<path d="M8 13V3M8 13l-4-4M8 13l4-4" stroke="#4ade80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>';
+                const counterparty = isSent ? tx.address_to : tx.address_from;
+
+                return `
+                    <div class="flex items-center gap-3 bg-[#1a1a2e] border border-[#2a2a45] rounded-2xl px-4 py-3 hover:border-[#3a3a55] transition-colors">
+                        <div class="w-9 h-9 rounded-full bg-[#2a2a45] flex items-center justify-center flex-shrink-0">
+                            <svg width="14" height="14" viewBox="0 0 16 16" fill="none">${arrowIcon}</svg>
+                        </div>
+                        <div class="flex-1 min-w-0">
+                            <div class="flex items-center gap-2 mb-0.5 flex-wrap">
+                                <span class="text-white text-sm font-medium">${isSent ? 'Sent' : 'Received'}</span>
+                                <span class="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-[#2a2a45] ${networkColor(tx.network)}">${networkLabel(tx.network)}</span>
+                                ${statusBadge(tx.status)}
+                            </div>
+                            <p class="text-[#6b6b8a] text-[11px] truncate">${isSent ? 'To' : 'From'}: ${shortAddr(counterparty)}</p>
+                            ${tx.fee > 0 ? `<p class="text-[#3a3a55] text-[10px]">Fee: ${tx.fee.toFixed(6)} ${networkLabel(tx.network)}</p>` : ''}
+                        </div>
+                        <div class="text-right flex-shrink-0">
+                            <p class="${amountColor} text-sm font-semibold">${sign} ${tx.amount?.toFixed(6) || '0'}</p>
+                            <p class="text-[#6b6b8a] text-[10px] mt-0.5">${formatTimestamp(tx.timestamp)}</p>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function showError(msg) {
+            const list = document.getElementById('txList');
+            if (!list) return;
+            list.innerHTML = `
+                <div class="rounded-2xl bg-red-900/20 border border-red-500/20 px-4 py-4 text-center">
+                    <p class="text-red-400 text-xs">${msg}</p>
+                </div>
+            `;
+        }
+
+        async function loadHistory() {
+            if (loading) return;
+            loading = true;
+
+            document.getElementById('txList').innerHTML = `
+                <div class="flex flex-col items-center gap-3 py-10">
+                    <div class="w-6 h-6 rounded-full border-2 border-[#2a2a45] border-t-sky-400 animate-spin"></div>
+                    <p class="text-[#6b6b8a] text-xs">Loading transactions...</p>
+                </div>
+            `;
+
+            const refreshIcon = document.getElementById('refreshIcon');
+            if (refreshIcon) refreshIcon.style.animation = 'spin 1s linear infinite';
+
+            try {
+                let btcTxs = [], ethTxs = [], solTxs = [];
+                
+                try {
+                    btcTxs = await invoke('get_transaction_history', { network: 'btc' });
+                } catch(e) { console.log('BTC history not available'); }
+                
+                try {
+                    ethTxs = await invoke('get_transaction_history', { network: 'eth' });
+                } catch(e) { console.log('ETH history not available'); }
+                
+                try {
+                    solTxs = await invoke('get_transaction_history', { network: 'sol' });
+                } catch(e) { console.log('SOL history not available'); }
+
+                allTxs = [...btcTxs, ...ethTxs, ...solTxs];
+
+                if (allTxs.length === 0) {
+                    renderTxs(allTxs);
+                    return;
+                }
+
+                allTxs.sort((a, b) => {
+                    const ta = parseInt(a.timestamp) || 0;
+                    const tb = parseInt(b.timestamp) || 0;
+                    return tb - ta;
+                });
+
+                renderTxs(allTxs);
+            } catch(e) {
+                if (isSessionExpired(e)) { handleSessionExpired(invoke); return; }
+                showError('Failed to load transactions: ' + e);
+            } finally {
+                loading = false;
+                if (refreshIcon) refreshIcon.style.animation = '';
+            }
+        }
+
+        document.querySelectorAll('.tab-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                activeFilter = btn.dataset.network;
+
+                document.querySelectorAll('.tab-btn').forEach(b => {
+                    b.classList.remove('bg-gradient-to-r', 'from-sky-400', 'to-purple-600', 'text-white', 'border-transparent');
+                    b.classList.add('bg-[#1a1a2e]', 'text-[#6b6b8a]', 'border-[#2a2a45]');
+                });
+                btn.classList.remove('bg-[#1a1a2e]', 'text-[#6b6b8a]', 'border-[#2a2a45]');
+                btn.classList.add('bg-gradient-to-r', 'from-sky-400', 'to-purple-600', 'text-white', 'border-transparent');
+
+                renderTxs(allTxs);
+            });
+        });
+
+        const refreshBtn = document.getElementById('refreshBtn');
+        if (refreshBtn) refreshBtn.onclick = () => loadHistory();
+
+        setupNavigation(invoke, password, 'history');
+
+        loadHistory();
+    }
+        
+            init();
+    </script>
+</body>
+</html>

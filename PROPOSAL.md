@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Team
 Oleksii Rusaniuk, Vitalii Diurd
 
@@ -59,3 +60,6 @@ Understand how to write programs with Rust and integrate it into a browser exten
 - dotenv
 - log
 - env_logger
+=======
+
+>>>>>>> origin/dev
